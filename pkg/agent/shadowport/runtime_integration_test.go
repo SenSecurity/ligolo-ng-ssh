@@ -71,19 +71,29 @@ func TestLiveShadowPort(t *testing.T) {
 
 func TestLiveRuntimeReferenceCounting(t *testing.T) {
 	if os.Getenv("LIGOLO_SHADOWPORT_INTEGRATION") != "1" {
-		t.Skip("set LIGOLO_SHADOWPORT_INTEGRATION=1 to inspect the embedded runtime lifecycle")
+		t.Skip("set LIGOLO_SHADOWPORT_INTEGRATION=1 to load the signed WinDivert driver")
 	}
-	first, err := acquireRuntime()
+	publicAddress := os.Getenv("LIGOLO_SHADOWPORT_PUBLIC_ADDRESS")
+	source := os.Getenv("LIGOLO_SHADOWPORT_SOURCE")
+	if publicAddress == "" || source == "" {
+		t.Fatal("public address and source environment variables are required")
+	}
+
+	SetAllowed(true)
+	first, err := NewListener(net.JoinHostPort(publicAddress, "445"), &protocol.ShadowPortConfig{
+		InternalPort:   18445,
+		AllowedSources: []string{source},
+	})
 	if err != nil {
-		t.Fatalf("first acquireRuntime: %v", err)
+		t.Fatalf("first NewListener: %v", err)
 	}
-	second, err := acquireRuntime()
+	second, err := NewListener(net.JoinHostPort(publicAddress, "445"), &protocol.ShadowPortConfig{
+		InternalPort:   18446,
+		AllowedSources: []string{"203.0.113.1/32"},
+	})
 	if err != nil {
-		_ = releaseRuntime()
-		t.Fatalf("second acquireRuntime: %v", err)
-	}
-	if first != second {
-		t.Fatal("runtime API was not shared")
+		_ = first.Close()
+		t.Fatalf("second NewListener: %v", err)
 	}
 
 	sharedRuntime.Lock()
@@ -93,14 +103,16 @@ func TestLiveRuntimeReferenceCounting(t *testing.T) {
 	if refs != 2 {
 		t.Fatalf("runtime refs = %d, want 2", refs)
 	}
-	if err := releaseRuntime(); err != nil {
-		t.Fatalf("first releaseRuntime: %v", err)
+	if err := first.Close(); err != nil {
+		_ = second.Close()
+		t.Fatalf("first Close: %v", err)
 	}
 	if _, err := os.Stat(runtimeDir); err != nil {
+		_ = second.Close()
 		t.Fatalf("runtime removed while one reference remained: %v", err)
 	}
-	if err := releaseRuntime(); err != nil {
-		t.Fatalf("second releaseRuntime: %v", err)
+	if err := second.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
 	}
 	if _, err := os.Stat(runtimeDir); !os.IsNotExist(err) {
 		t.Fatalf("runtime directory still exists after final release: %v", err)
