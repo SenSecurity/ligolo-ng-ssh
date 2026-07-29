@@ -2,8 +2,9 @@
 
 - Date: 2026-07-29
 - Upstream: `nicocha30/ligolo-ng` at `60fb207404d35a0674874220a5b93de1d2bdcfb0`
-- Web UI upstream: `nicocha30/ligolo-ng-web` at `d26d393468335c599e60a5311ac7fef9fcf738be`
-- Build version: `ssh-60fb207404d3-dirty`
+- Web UI fork: `SenSecurity/ligolo-ng-web` at `936dbda884a0a9e975f4c82f993f57a5e21f4afa`
+- Build source: `341e1e7207565019ddfa2a59f9639496e4a91de1`
+- Build version: `ssh-341e1e720756`
 
 ## Scope
 
@@ -49,13 +50,14 @@ Passed:
 - Fingerprint and `known_hosts` verification tests
 - Explicit MsgPack wire-name compatibility test for Garble builds
 
-The final `release` directory contains exactly 12 binaries, four platform
-directories, and one root `README.md`. All 13 SHA256 hashes were recomputed
+The final `release` directory contains the original 12 binaries plus two
+Windows AMD64 ShadowPort agents, four platform directories, one root
+`README.md`, and the WinDivert license. All 16 SHA256 hashes were recomputed
 and matched `artifacts/SHA256SUMS`.
 
 Architecture inspection:
 
-- Windows AMD64: three PE32+ x86-64 console executables
+- Windows AMD64: five PE32+ x86-64 console executables
 - Windows ARM64: three PE32+ AArch64 console executables
 - Linux AMD64: three statically linked ELF x86-64 executables
 - Linux ARM64: three statically linked ELF AArch64 executables
@@ -168,3 +170,98 @@ localhost or place it behind a trusted reverse proxy.
 Test processes and temporary TUN interfaces were removed after verification.
 Installing `qemu-user-static` in WSL was the only retained system-level test
 dependency.
+
+## ShadowPort SMB/445 verification
+
+This section records the final `v0.9-ssh.2` candidate checks. ShadowPort uses
+the existing reverse-listener stream over SSH. It source-selects inbound
+TCP/445 before the PID 4 socket, translates the selected flow to an internal
+port, and translates replies back to source port 445.
+
+### Source and build checks
+
+Passed:
+
+- `go test ./...`
+- `go vet ./...`
+- `go test -race ./pkg/protocol ./pkg/agent/shadowport ./pkg/sshtransport`
+- Windows AMD64 tagged test and build with `CGO_ENABLED=0`
+- Web changed-file ESLint, TypeScript build, and embedded Ligolo Web build
+- Protocol compatibility test for legacy listener shapes
+- Tuple reuse regression test after FIN
+- Source allowlist, direct-internal traffic, capacity, expiry, malformed
+  packet, CIDR filter, and overlapping-scope unit tests
+- Official WinDivert 2.2.2 archive, DLL, and SYS hashes matched pinned values
+- WinDivert64.sys Authenticode status was valid before embedding
+- Manifest recorded `working_tree_dirty=false` and
+  `web_ui_working_tree_dirty=false`
+
+The standard Windows AMD64 agent did not contain the `WinDivert64.sys` marker.
+Both ShadowPort agents did. The final matrix contained 14 binaries:
+
+- Windows AMD64: proxy, standard agent, standard Garble agent,
+  `agent-shadow.exe`, and `agent-shadow-garble.exe`
+- Windows ARM64, Linux AMD64, and Linux ARM64: unchanged proxy, standard agent,
+  and standard Garble agent sets
+
+PE inspection reported `0x8664` for every Windows AMD64 executable and
+`0xAA64` for every Windows ARM64 executable. WSL `file` reported static x86-64
+ELF for Linux AMD64 and static AArch64 ELF for Linux ARM64. All three Linux
+AMD64 binaries executed in WSL and printed version
+`ssh-341e1e720756`.
+
+### Final release SSH and listener matrix
+
+All runs used the final binaries in `release/` and the final Linux AMD64 proxy
+in WSL Ubuntu:
+
+| Agent | SSH authentication | Exact payload | Result |
+|---|---|---|---|
+| `agent-shadow.exe` | no-auth | `FINAL-NORMAL-NOAUTH` | passed |
+| `agent-shadow-garble.exe` | no-auth | `FINAL-GARBLE-NOAUTH` | passed |
+| `agent-shadow.exe` | public key + pinned host key | `FINAL-NORMAL-KEY` | passed |
+| `agent-shadow-garble.exe` | public key + pinned host key | `FINAL-GARBLE-KEY` | passed |
+| `agent.exe` | no-auth | `STANDARD-NORMAL-NOAUTH` | passed |
+| `agent-garble.exe` | no-auth | `STANDARD-GARBLE-NOAUTH` | passed |
+| `agent.exe` | public key + pinned host key | `STANDARD-NORMAL-KEY` | passed |
+| `agent-garble.exe` | public key + pinned host key | `STANDARD-GARBLE-KEY` | passed |
+
+Each ShadowPort run advertised `shadowport-smb-v1`, exposed its internal port
+and source scope through the authenticated API, transported the exact payload
+from WSL to Windows TCP/445 and back through SSH, removed the runtime directory
+and temporary firewall rule, and left PID 4 listening on TCP/445. Standard
+agents advertised no ShadowPort capability and passed the ordinary listener
+regression without loading WinDivert.
+
+### Real SMB and ntlmrelayx
+
+An isolated WSL venv installed official Impacket 0.13.1 for test use only.
+`ntlmrelayx.py` listened on `127.0.0.1:8445` with SMB2 support. An Impacket
+SMB client connected from WSL to the Windows pivot address on TCP/445 through
+the final `agent-shadow.exe`. The relay log recorded:
+
+```text
+[*] (SMB): Received connection from 127.0.0.1, attacking target smb://127.0.0.1:65534
+```
+
+The deliberately unreachable target then failed, which was the expected
+negative control. This proves that SMB2 negotiate and NTLM reached the actual
+ntlmrelayx SMB server through the SSH ShadowPort listener, not only a generic
+TCP echo service.
+
+### Driver lifecycle, forced termination, and cleanup
+
+- Two simultaneous disjoint ShadowPort listeners shared one extracted runtime
+  with reference count 2.
+- Closing the first listener retained the runtime for the second listener.
+- Closing the last listener removed the runtime directory and both temporary
+  firewall rules.
+- A forced kill after payload `FINAL-FORCED-KILL` immediately restored native
+  TCP/445 reachability; PID 4 remained the owner.
+- As documented, forced termination left a feature-named runtime directory and
+  firewall rule because orderly cleanup could not run.
+- The documented narrow cleanup commands removed both residues; verification
+  then returned `RuntimeResidue=False` and `FirewallResidue=False`.
+
+No driver, DLL, firewall rule, proxy, agent, echo server, or ntlmrelayx test
+process remained after the final checks.
