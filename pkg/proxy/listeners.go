@@ -30,16 +30,21 @@ import (
 )
 
 type LigoloListener struct {
-	ID      int32
-	ctx     context.Context
-	sess    *yamux.Session
-	Conn    net.Conn
-	addr    string
-	network string
-	to      string
+	ID         int32
+	ctx        context.Context
+	sess       *yamux.Session
+	Conn       net.Conn
+	addr       string
+	network    string
+	to         string
+	shadowPort *protocol.ShadowPortConfig
 }
 
 func NewListener(sess *yamux.Session, addr string, network string, to string) (LigoloListener, error) {
+	return NewListenerWithShadowPort(sess, addr, network, to, nil)
+}
+
+func NewListenerWithShadowPort(sess *yamux.Session, addr string, network string, to string, shadowPort *protocol.ShadowPortConfig) (LigoloListener, error) {
 	// Open a new Yamux Session
 	conn, err := sess.Open()
 	if err != nil {
@@ -49,7 +54,7 @@ func NewListener(sess *yamux.Session, addr string, network string, to string) (L
 	ligoloProtocol := protocol.NewEncoderDecoder(conn)
 
 	// Request to open a new port on the agent
-	listenerPacket := protocol.ListenerRequestPacket{Address: addr, Network: network}
+	listenerPacket := protocol.ListenerRequestPacket{Address: addr, Network: network, ShadowPort: cloneShadowPortConfig(shadowPort)}
 	if err := ligoloProtocol.Encode(listenerPacket); err != nil {
 		conn.Close()
 		return LigoloListener{}, err
@@ -65,7 +70,7 @@ func NewListener(sess *yamux.Session, addr string, network string, to string) (L
 		conn.Close()
 		return LigoloListener{}, errors.New(response.ErrString)
 	}
-	return LigoloListener{ID: response.ListenerID, sess: sess, Conn: conn, addr: addr, network: network, to: to}, nil
+	return LigoloListener{ID: response.ListenerID, sess: sess, Conn: conn, addr: addr, network: network, to: to, shadowPort: cloneShadowPortConfig(shadowPort)}, nil
 }
 
 func (l *LigoloListener) ResetMultiplexer(sess *yamux.Session) error {
@@ -95,8 +100,25 @@ func (l *LigoloListener) Network() string {
 	return l.network
 }
 
+func (l *LigoloListener) ShadowPort() *protocol.ShadowPortConfig {
+	return cloneShadowPortConfig(l.shadowPort)
+}
+
 func (l *LigoloListener) String() string {
+	if l.shadowPort != nil {
+		return fmt.Sprintf("[#%d] (%s ShadowPort %s->%d) [Agent] %s => [Proxy] %s", l.ID, l.network, l.addr, l.shadowPort.InternalPort, l.addr, l.to)
+	}
 	return fmt.Sprintf("[#%d] (%s) [Agent] %s => [Proxy] %s", l.ID, l.network, l.addr, l.to)
+}
+
+func cloneShadowPortConfig(config *protocol.ShadowPortConfig) *protocol.ShadowPortConfig {
+	if config == nil {
+		return nil
+	}
+	return &protocol.ShadowPortConfig{
+		InternalPort:   config.InternalPort,
+		AllowedSources: append([]string(nil), config.AllowedSources...),
+	}
 }
 
 func (l *LigoloListener) Stop() error {

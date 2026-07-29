@@ -22,6 +22,8 @@ import (
 	"io"
 	"reflect"
 	"testing"
+
+	"github.com/shamaton/msgpack/v2"
 )
 
 func TestEncodeDecode(t *testing.T) {
@@ -91,6 +93,55 @@ func TestConnectPacketsPreserveFramedUDPNegotiation(t *testing.T) {
 	}
 }
 
+func TestListenerPacketPreservesShadowPortConfiguration(t *testing.T) {
+	var buffer bytes.Buffer
+	packet := ListenerRequestPacket{
+		Network: "tcp",
+		Address: "192.0.2.10:445",
+		ShadowPort: &ShadowPortConfig{
+			InternalPort:   8445,
+			AllowedSources: []string{"198.51.100.20/32"},
+		},
+	}
+	encoder := NewEncoder(&buffer)
+	if err := encoder.Encode(packet); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	decoder := NewDecoder(&buffer)
+	if err := decoder.Decode(); err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	got := decoder.Payload.(*ListenerRequestPacket)
+	if got.ShadowPort == nil || got.ShadowPort.InternalPort != 8445 {
+		t.Fatalf("ShadowPort decode = %+v", got.ShadowPort)
+	}
+}
+
+func TestListenerPacketRemainsDecodableByLegacyShape(t *testing.T) {
+	type legacyListenerRequest struct {
+		Network string `msgpack:"Network"`
+		Address string `msgpack:"Address"`
+	}
+	encoded, err := msgpack.Marshal(ListenerRequestPacket{
+		Network: "tcp",
+		Address: "192.0.2.10:445",
+		ShadowPort: &ShadowPortConfig{
+			InternalPort:   8445,
+			AllowedSources: []string{"198.51.100.20/32"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var legacy legacyListenerRequest
+	if err := msgpack.Unmarshal(encoded, &legacy); err != nil {
+		t.Fatalf("legacy Unmarshal: %v", err)
+	}
+	if legacy.Network != "tcp" || legacy.Address != "192.0.2.10:445" {
+		t.Fatalf("legacy decode = %+v", legacy)
+	}
+}
+
 func TestWireFieldNamesAreExplicitAndBackwardCompatible(t *testing.T) {
 	packetTypes := []interface{}{
 		Envelope{},
@@ -109,6 +160,7 @@ func TestWireFieldNamesAreExplicitAndBackwardCompatible(t *testing.T) {
 		ConnectResponsePacket{},
 		HostPingRequestPacket{},
 		HostPingResponsePacket{},
+		ShadowPortConfig{},
 	}
 
 	for _, packet := range packetTypes {

