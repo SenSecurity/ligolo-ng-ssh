@@ -102,7 +102,10 @@ try {
     }
     $webWorkingTreeDirty = [bool]$webStatus
     $webLockSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $webSource 'package-lock.json')).Hash.ToLowerInvariant()
-    $workingTreeStatus = git status --porcelain --untracked-files=all
+    $workingTreeStatus = git status --porcelain --untracked-files=all -- . `
+        ':(exclude)artifacts/SHA256SUMS' `
+        ':(exclude)artifacts/build-manifest.json' `
+        ':(exclude)artifacts/TEST-REPORT.md'
     if ($LASTEXITCODE -ne 0) {
         throw 'Unable to inspect working tree'
     }
