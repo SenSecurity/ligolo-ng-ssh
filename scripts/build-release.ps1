@@ -96,9 +96,17 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw 'Unable to resolve Web UI commit'
     }
-    $webWorkingTreeDirty = [bool]((git -C $webSource status --porcelain).Trim())
+    $webStatus = git -C $webSource status --porcelain
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Unable to inspect Web UI working tree'
+    }
+    $webWorkingTreeDirty = [bool]$webStatus
     $webLockSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $webSource 'package-lock.json')).Hash.ToLowerInvariant()
-    $workingTreeDirty = [bool]((git status --porcelain --untracked-files=all).Trim())
+    $workingTreeStatus = git status --porcelain --untracked-files=all
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Unable to inspect working tree'
+    }
+    $workingTreeDirty = [bool]$workingTreeStatus
     $buildDate = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
     $version = 'ssh-' + $commit.Substring(0, 12)
     if ($workingTreeDirty) {
