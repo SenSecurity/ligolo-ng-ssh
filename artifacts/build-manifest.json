@@ -1,0 +1,42 @@
+﻿{
+    "upstream":  "https://github.com/nicocha30/ligolo-ng",
+    "commit":  "60fb207404d35a0674874220a5b93de1d2bdcfb0",
+    "web_ui_commit":  "d26d393468335c599e60a5311ac7fef9fcf738be",
+    "web_ui_working_tree_dirty":  true,
+    "web_ui_package_lock_sha256":  "326016a69e8b645f17beef3ca3a55209a3bb254a1398b1290f7b5a0eb612bef8",
+    "working_tree_dirty":  true,
+    "version":  "ssh-60fb207404d3-dirty",
+    "build_date_utc":  "2026-07-29T17:47:29Z",
+    "go":  "go version go1.26.5 windows/amd64",
+    "garble":  "mvdan.cc/garble v0.17.0",
+    "garble_flags":  [
+                         "-literals",
+                         "-tiny"
+                     ],
+    "targets":  [
+                    {
+                        "target":  "windows-amd64",
+                        "goos":  "windows",
+                        "goarch":  "amd64",
+                        "garble_seed":  "KYfw59owrnQ"
+                    },
+                    {
+                        "target":  "windows-arm64",
+                        "goos":  "windows",
+                        "goarch":  "arm64",
+                        "garble_seed":  "sn3obo1RiTM"
+                    },
+                    {
+                        "target":  "linux-amd64",
+                        "goos":  "linux",
+                        "goarch":  "amd64",
+                        "garble_seed":  "0FbhteSJaSk"
+                    },
+                    {
+                        "target":  "linux-arm64",
+                        "goos":  "linux",
+                        "goarch":  "arm64",
+                        "garble_seed":  "7rmmuym9Wn0"
+                    }
+                ]
+}

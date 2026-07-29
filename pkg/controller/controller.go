@@ -25,6 +25,7 @@ import (
 	"net/http"
 
 	"github.com/coder/websocket"
+	"github.com/nicocha30/ligolo-ng/pkg/sshtransport"
 	"github.com/nicocha30/ligolo-ng/pkg/tlsutils"
 	"github.com/nicocha30/ligolo-ng/pkg/utils"
 	"github.com/sirupsen/logrus"
@@ -32,7 +33,7 @@ import (
 
 type Controller struct {
 	Network    string
-	Connection chan net.Conn
+	Connection chan sshtransport.Conn
 	startchan  chan error
 	donechan   chan error
 	ControllerConfig
@@ -41,11 +42,18 @@ type Controller struct {
 type ControllerConfig struct {
 	Address           string
 	CertManagerConfig *tlsutils.CertManagerConfig
+	SSHConfig         *sshtransport.ServerOptions
 	tlsConfig         *tls.Config
 }
 
 func New(config ControllerConfig) Controller {
-	return Controller{Network: "tcp", Connection: make(chan net.Conn, 1024), ControllerConfig: config, startchan: make(chan error)}
+	return Controller{
+		Network:          "tcp",
+		Connection:       make(chan sshtransport.Conn, 1024),
+		ControllerConfig: config,
+		startchan:        make(chan error, 1),
+		donechan:         make(chan error, 1),
+	}
 }
 
 func (c *Controller) WaitForReady() error {
@@ -68,7 +76,30 @@ func (c *Controller) ListenAndServe() {
 	if err != nil {
 		c.startchan <- err
 	}
-	if url.IsWebsocket() {
+	if url.IsSSH() {
+		if c.SSHConfig == nil {
+			c.startchan <- errors.New("SSH listener requires SSH server configuration")
+			return
+		}
+		sshConfig, configErr := sshtransport.NewServerConfig(*c.SSHConfig)
+		if configErr != nil {
+			c.startchan <- configErr
+			return
+		}
+		listener, listenErr := net.Listen(c.Network, url.Host)
+		if listenErr != nil {
+			c.startchan <- listenErr
+			return
+		}
+		defer listener.Close()
+
+		c.startchan <- nil
+		logrus.Infof("Listening SSH on %s", url.Host)
+		if fingerprint, fingerprintErr := sshtransport.PrivateKeyFingerprint(c.SSHConfig.HostKeyPath, c.SSHConfig.HostKeyPassphrase); fingerprintErr == nil {
+			logrus.Infof("SSH host-key fingerprint: %s", fingerprint)
+		}
+		err = sshtransport.Serve(listener, sshConfig, c.Connection, c.SSHConfig.HandshakeTimeout)
+	} else if url.IsWebsocket() {
 		var listener net.Listener
 		// Websocket protocol
 		if url.Scheme == "http" || url.Scheme == "ws" {

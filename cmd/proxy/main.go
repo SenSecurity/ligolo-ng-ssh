@@ -20,12 +20,14 @@ import (
 	"flag"
 	"fmt"
 	"github.com/nicocha30/ligolo-ng/cmd/proxy/config"
+	"github.com/nicocha30/ligolo-ng/pkg/sshtransport"
 	"github.com/nicocha30/ligolo-ng/pkg/tlsutils"
 	"log"
 	"os"
 	"runtime"
 	"runtime/pprof"
 	"strings"
+	"time"
 
 	"github.com/desertbit/grumble"
 	"github.com/hashicorp/yamux"
@@ -61,6 +63,12 @@ func main() {
 	var maxInflight = flag.Int("max-inflight", 4096, "maximum number of in-flight TCP connection requests per tunnel")
 	var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
 	var memprofile = flag.String("memprofile", "", "write memory profile to `file`")
+	var sshUser = flag.String("ssh-user", "ligolo", "SSH username accepted by the embedded SSH listener")
+	var sshHostKey = flag.String("ssh-host-key", "ligolo-ssh-host-key", "SSH server private host key")
+	var sshHostKeyPassphraseEnv = flag.String("ssh-host-key-passphrase-env", "", "environment variable containing the SSH host-key passphrase")
+	var sshAuthorizedKeys = flag.String("ssh-authorized-keys", "ligolo-ssh-authorized_keys", "authorized_keys file for SSH agents")
+	var sshInsecureAllowNoAuth = flag.Bool("ssh-insecure-allow-no-auth", false, "allow SSH agents without client authentication (dangerous)")
+	var sshHandshakeTimeout = flag.Int("ssh-handshake-timeout", 20, "SSH handshake and initial channel timeout in seconds")
 
 	flag.Usage = func() {
 		fmt.Printf("Ligolo-ng %s / %s / %s\n", version, commit, date)
@@ -70,6 +78,12 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Printf("Ligolo-ng %s / %s / %s\n", version, commit, date)
+		return
+	}
+
 	setFlags := make(map[string]struct{})
 	flag.Visit(func(f *flag.Flag) {
 		setFlags[f.Name] = struct{}{}
@@ -111,13 +125,14 @@ func main() {
 		logrus.Fatal(err)
 	}
 
-	if *versionFlag {
-		fmt.Printf("Ligolo-ng %s / %s / %s\n", version, commit, date)
-		return
-	}
-
 	if *verboseFlag {
 		logrus.SetLevel(logrus.DebugLevel)
+	}
+	if *sshHandshakeTimeout < 1 {
+		logrus.Fatal("ssh-handshake-timeout must be at least 1 second")
+	}
+	if *sshInsecureAllowNoAuth {
+		logrus.Warn("SSH client authentication is disabled; any reachable agent can connect")
 	}
 
 	// If verbose is set, include method and line in log messages
@@ -146,6 +161,15 @@ func main() {
 
 	app.Run()
 
+	var sshHostKeyPassphrase []byte
+	if *sshHostKeyPassphraseEnv != "" {
+		passphrase, ok := os.LookupEnv(*sshHostKeyPassphraseEnv)
+		if !ok {
+			logrus.Fatalf("SSH host-key passphrase environment variable %q is not set", *sshHostKeyPassphraseEnv)
+		}
+		sshHostKeyPassphrase = []byte(passphrase)
+	}
+
 	proxyController := controller.New(controller.ControllerConfig{
 		Address: *listenInterface,
 		CertManagerConfig: &tlsutils.CertManagerConfig{
@@ -156,6 +180,14 @@ func main() {
 			SelfcertDomain:  *selfcertDomain,
 			EnableAutocert:  *enableAutocert,
 			EnableSelfcert:  *enableSelfcert,
+		},
+		SSHConfig: &sshtransport.ServerOptions{
+			User:                *sshUser,
+			HostKeyPath:         *sshHostKey,
+			HostKeyPassphrase:   sshHostKeyPassphrase,
+			AuthorizedKeysPath:  *sshAuthorizedKeys,
+			InsecureAllowNoAuth: *sshInsecureAllowNoAuth,
+			HandshakeTimeout:    time.Duration(*sshHandshakeTimeout) * time.Second,
 		},
 	})
 

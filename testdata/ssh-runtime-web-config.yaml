@@ -1,0 +1,18 @@
+web:
+  enabled: true
+  enableui: true
+  listen: 127.0.0.1:18084
+  logfile: ""
+  users:
+    ligolo: password
+  corsallowedorigin:
+    - http://127.0.0.1:18084
+  trustedproxies:
+    - 127.0.0.1
+  tls:
+    enabled: false
+
+proxy:
+  maxinflight: 4096
+  selfcertcache: ligolo-selfcerts
+  historyfile: ligolo-ng.history

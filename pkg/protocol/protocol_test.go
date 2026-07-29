@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"reflect"
 	"testing"
 )
 
@@ -87,6 +88,40 @@ func TestConnectPacketsPreserveFramedUDPNegotiation(t *testing.T) {
 				t.Fatal("FramedUDP negotiation flag was lost")
 			}
 		})
+	}
+}
+
+func TestWireFieldNamesAreExplicitAndBackwardCompatible(t *testing.T) {
+	packetTypes := []interface{}{
+		Envelope{},
+		InfoReplyPacket{},
+		ListenerSockRequestPacket{},
+		ListenerSockResponsePacket{},
+		ListenerSocketConnectionReady{},
+		ListenerRequestPacket{},
+		ListenerResponsePacket{},
+		ListenerBindPacket{},
+		ListenerBindReponse{},
+		ListenerCloseRequestPacket{},
+		ListenerCloseResponsePacket{},
+		NetInterface{},
+		ConnectRequestPacket{},
+		ConnectResponsePacket{},
+		HostPingRequestPacket{},
+		HostPingResponsePacket{},
+	}
+
+	for _, packet := range packetTypes {
+		packetType := reflect.TypeOf(packet)
+		for i := 0; i < packetType.NumField(); i++ {
+			field := packetType.Field(i)
+			if field.PkgPath != "" {
+				continue
+			}
+			if got := field.Tag.Get("msgpack"); got != field.Name {
+				t.Errorf("%s.%s msgpack tag = %q, want legacy wire name %q", packetType.Name(), field.Name, got, field.Name)
+			}
+		}
 	}
 }
 

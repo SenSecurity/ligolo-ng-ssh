@@ -1,6 +1,8 @@
 .idea/*
+.tools/
 setuptun.sh
 dist/
+release/
 ligolo-ng.history
 ligolo-selfcerts/
 ligolo-ng.yaml

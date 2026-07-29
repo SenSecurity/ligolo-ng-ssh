@@ -40,8 +40,12 @@ func (l *LigoloURL) IsWebsocket() bool {
 	return false
 }
 
+func (l *LigoloURL) IsSSH() bool {
+	return l.Scheme == "ssh"
+}
+
 func (l *LigoloURL) IsValid() bool {
-	return l.IsWebsocket() || l.Scheme == ""
+	return l.IsWebsocket() || l.IsSSH() || l.Scheme == ""
 }
 
 func ParseLigoloURL(rawURL string) (*LigoloURL, error) {

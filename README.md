@@ -1,8 +1,30 @@
-# Ligolo-ng : Tunneling like a VPN
+# Ligolo-ng SSH
+
+> [!IMPORTANT]
+> **This repository is an independent fork of
+> [nicocha30/ligolo-ng](https://github.com/nicocha30/ligolo-ng).**
+> Ligolo-ng was created by
+> [Nicolas Chatelain (@nicocha30)](https://github.com/nicocha30), who deserves
+> full credit for the original project, core tunneling engine, and ongoing
+> upstream work. This fork adds an SSH agent-to-proxy transport and related
+> release tooling. It is not an official Ligolo-ng release and is not endorsed
+> by the upstream maintainers.
 
 ![Ligolo Logo](doc/logo.png)
 
 An advanced, yet simple, tunneling tool that uses TUN interfaces.
+
+This fork supports a real SSH transport for agent-to-proxy connections,
+with public-key authentication by default and an explicit no-auth assessment
+mode. See [SSH transport setup, security, builds, and
+verification](doc/ssh-transport.md).
+
+## Downloads
+
+Prebuilt proxy, normal agent, and Garble agent binaries are available on the
+[GitHub Releases page](https://github.com/SenSecurity/ligolo-ng-ssh/releases).
+Download the bundle matching the target operating system and architecture, then
+follow its included `README.md`.
 
 [![GPLv3](https://img.shields.io/badge/License-GPLv3-brightgreen.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![GitHub Sponsors](https://img.shields.io/github/sponsors/nicocha30)](https://github.com/sponsors/nicocha30)
@@ -28,6 +50,7 @@ An advanced, yet simple, tunneling tool that uses TUN interfaces.
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 
+- [Downloads](#downloads)
 - [Introduction](#introduction)
 - [Features](#features)
 - [Demo](#demo)
@@ -38,7 +61,7 @@ An advanced, yet simple, tunneling tool that uses TUN interfaces.
 - [Performance](#performance)
 - [Caveats](#caveats)
 - [Todo](#todo)
-- [Credits](#credits)
+- [Credits and fork attribution](#credits-and-fork-attribution)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -134,7 +157,14 @@ When using *nmap*, you should use `--unprivileged` or `-PE` to avoid false posit
 - Do not *RST* when receiving an *ACK* from an invalid TCP connection (nmap will report the host as up) ;
 - Add mTLS support.
 
-## Credits
+## Credits and fork attribution
 
-- Nicolas Chatelain <nicolas -at- chatelain.me>
-- Jeremie Bedjai (Ligolo-ng-Web)
+- **Original Ligolo-ng project and core implementation:** [Nicolas Chatelain
+  (@nicocha30)](https://github.com/nicocha30/ligolo-ng)
+- **Original Ligolo-ng Web UI:** [Jeremie
+  Bedjai](https://github.com/jeremiebedjai)
+- **SSH transport fork changes:** [SenSecurity](https://github.com/SenSecurity)
+
+Please report upstream Ligolo-ng issues to the
+[original project](https://github.com/nicocha30/ligolo-ng). Report issues
+specific to the SSH transport or this fork in this repository.

@@ -23,8 +23,8 @@ import (
 
 // Envelope is the structure used when Encoding/Decode ligolo packets
 type Envelope struct {
-	Type    uint8
-	Payload interface{}
+	Type    uint8       `msgpack:"Type"`
+	Payload interface{} `msgpack:"Payload"`
 }
 
 const (
@@ -62,49 +62,49 @@ type InfoRequestPacket struct {
 
 // InfoReplyPacket contains the Name of the agent and the network interfaces configuration
 type InfoReplyPacket struct {
-	Name       string
-	Interfaces []NetInterface
-	SessionID  string
+	Name       string         `msgpack:"Name"`
+	Interfaces []NetInterface `msgpack:"Interfaces"`
+	SessionID  string         `msgpack:"SessionID"`
 }
 
 // ListenerSockRequestPacket is used by the proxy when relaying a listener socket
 type ListenerSockRequestPacket struct {
-	SockID int32
+	SockID int32 `msgpack:"SockID"`
 }
 
 // ListenerSockRequestPacket is the response to ListenerSockRequestPacket
 type ListenerSockResponsePacket struct {
-	ErrString string
-	Err       bool
+	ErrString string `msgpack:"ErrString"`
+	Err       bool   `msgpack:"Err"`
 }
 
 type ListenerSocketConnectionReady struct {
-	Err bool
+	Err bool `msgpack:"Err"`
 }
 
 // ListenerRequestPacket is used when a new listener socket is created by the proxy.
 type ListenerRequestPacket struct {
-	Network string
-	Address string
+	Network string `msgpack:"Network"`
+	Address string `msgpack:"Address"`
 }
 
 // ListenerResponsePacket is used to indicate if the Listener was created, and send the ListenerID.
 type ListenerResponsePacket struct {
-	ListenerID int32
-	Err        bool
-	ErrString  string
+	ListenerID int32  `msgpack:"ListenerID"`
+	Err        bool   `msgpack:"Err"`
+	ErrString  string `msgpack:"ErrString"`
 }
 
 // ListenerBindPacket is used by the proxy to Bind to a ListenerID, waiting for connections.
 type ListenerBindPacket struct {
-	ListenerID int32
+	ListenerID int32 `msgpack:"ListenerID"`
 }
 
 // ListenerBindReponse is returned when listener sockets are ready to be relayed from the agent to the proxy.
 type ListenerBindReponse struct {
-	SockID    int32
-	Err       bool
-	ErrString string
+	SockID    int32  `msgpack:"SockID"`
+	Err       bool   `msgpack:"Err"`
+	ErrString string `msgpack:"ErrString"`
 }
 
 // ListenerUDPPacket
@@ -113,23 +113,23 @@ type ListenerUDPPacket struct {
 
 // ListenerCloseRequestPacket is the packet sent when closing Listeners
 type ListenerCloseRequestPacket struct {
-	ListenerID int32
+	ListenerID int32 `msgpack:"ListenerID"`
 }
 
 // ListenerCloseResponsePacket is the response to ListenerCloseRequestPacket
 type ListenerCloseResponsePacket struct {
-	ErrString string
-	Err       bool
+	ErrString string `msgpack:"ErrString"`
+	Err       bool   `msgpack:"Err"`
 }
 
 // NetInterface is the structure containing the agent network informations
 type NetInterface struct {
-	Index        int              // positive integer that starts at one, zero is never used
-	MTU          int              // maximum transmission unit
-	Name         string           // e.g., "en0", "lo0", "eth0.100"
-	HardwareAddr net.HardwareAddr // IEEE MAC-48, EUI-48 and EUI-64 form
-	Flags        net.Flags        // e.g., FlagUp, FlagLoopback, FlagMulticast
-	Addresses    []string
+	Index        int              `msgpack:"Index"`        // positive integer that starts at one, zero is never used
+	MTU          int              `msgpack:"MTU"`          // maximum transmission unit
+	Name         string           `msgpack:"Name"`         // e.g., "en0", "lo0", "eth0.100"
+	HardwareAddr net.HardwareAddr `msgpack:"HardwareAddr"` // IEEE MAC-48, EUI-48 and EUI-64 form
+	Flags        net.Flags        `msgpack:"Flags"`        // e.g., FlagUp, FlagLoopback, FlagMulticast
+	Addresses    []string         `msgpack:"Addresses"`
 }
 
 func (ni NetInterface) MarshalJSON() ([]byte, error) {
@@ -178,28 +178,28 @@ func NewNetInterfaces(netif []net.Interface) (out []NetInterface) {
 
 // ConnectRequestPacket is sent by the proxy to request a new TCP/UDP connection
 type ConnectRequestPacket struct {
-	Net       uint8
-	Transport uint8
-	Address   string
-	Port      uint16
-	FramedUDP bool
+	Net       uint8  `msgpack:"Net"`
+	Transport uint8  `msgpack:"Transport"`
+	Address   string `msgpack:"Address"`
+	Port      uint16 `msgpack:"Port"`
+	FramedUDP bool   `msgpack:"FramedUDP"`
 }
 
 // ConnectResponsePacket is the response to the ConnectRequestPacket and indicate if the connection can be established, and if a RST packet need to be sent
 type ConnectResponsePacket struct {
-	Established bool
-	Reset       bool
-	FramedUDP   bool
+	Established bool `msgpack:"Established"`
+	Reset       bool `msgpack:"Reset"`
+	FramedUDP   bool `msgpack:"FramedUDP"`
 }
 
 // HostPingRequestPacket is used when a ICMP packet is received on the proxy server. It is used to request a ping request to the agent
 type HostPingRequestPacket struct {
-	Address string
+	Address string `msgpack:"Address"`
 }
 
 // HostPingResponsePacket is sent by the agent to indicate the requested host status
 type HostPingResponsePacket struct {
-	Alive bool
+	Alive bool `msgpack:"Alive"`
 }
 
 // AgentKillRequestPacket is sent by the proxy to terminate an agent

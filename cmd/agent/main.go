@@ -23,6 +23,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -37,6 +38,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/hashicorp/yamux"
 	"github.com/nicocha30/ligolo-ng/pkg/agent"
+	"github.com/nicocha30/ligolo-ng/pkg/sshtransport"
 	"github.com/sirupsen/logrus"
 	goproxy "golang.org/x/net/proxy"
 )
@@ -58,10 +60,19 @@ func main() {
 	var reconnectDelay = flag.Int("reconnect-delay", 20, "reconnection delay in seconds (default: 20)")
 	var reconnectTimeout = flag.Int("reconnect-timeout", 300, "total reconnection timeout in seconds (default: 300 = 5 minutes)")
 	var socksProxy = flag.String("proxy", "", "proxy URL address (http://admin:secret@127.0.0.1:8080) or socks://admin:secret@127.0.0.1:8080")
-	var serverAddr = flag.String("connect", "", "connect to proxy (domain:port)")
+	var serverAddr = flag.String("connect", "", "connect to proxy (domain:port, websocket URL, or ssh://host:port)")
 	var bindAddr = flag.String("bind", "", "bind to ip:port")
 	var userAgent = flag.String("ua", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36", "HTTP User-Agent")
 	var versionFlag = flag.Bool("version", false, "show the current version")
+	var sshUser = flag.String("ssh-user", "ligolo", "SSH username")
+	var sshKey = flag.String("ssh-key", "", "SSH private key used to authenticate the agent")
+	var sshKeyPassphraseEnv = flag.String("ssh-key-passphrase-env", "", "environment variable containing the SSH private-key passphrase")
+	var sshKnownHosts = flag.String("ssh-known-hosts", "", "SSH known_hosts file used to verify the proxy")
+	var sshHostKeyFingerprint = flag.String("ssh-host-key-fingerprint", "", "accepted proxy SSH host-key fingerprint (SHA256:<base64>)")
+	var sshInsecureIgnoreHostKey = flag.Bool("ssh-insecure-ignore-host-key", false, "disable SSH host-key verification (dangerous)")
+	var sshInsecureNoAuth = flag.Bool("ssh-insecure-no-auth", false, "connect without SSH client authentication (dangerous; proxy must explicitly allow it)")
+	var sshConnectTimeout = flag.Int("ssh-connect-timeout", 20, "SSH TCP/handshake timeout in seconds")
+	var sshKeepAlive = flag.Int("ssh-keepalive", 30, "SSH keepalive interval in seconds (0 disables)")
 
 	flag.Usage = func() {
 		fmt.Printf("Ligolo-ng %s / %s / %s\n", version, commit, date)
@@ -94,7 +105,7 @@ func main() {
 
 	ligoloUrl, err := utils.ParseLigoloURL(*serverAddr)
 	if err != nil {
-		logrus.Fatalf("Invalid connect address, please use http(s)://host:port for websocket or host:port for tcp")
+		logrus.Fatalf("Invalid connect address, use ssh://host:port, http(s)://host:port for websocket, or host:port for TCP")
 	}
 
 	tlsConfig.ServerName = ligoloUrl.Hostname()
@@ -114,6 +125,21 @@ func main() {
 	if *reconnectTimeout < *reconnectDelay {
 		logrus.Fatal("reconnect-timeout must be greater than reconnect-delay")
 	}
+	if *sshConnectTimeout < 1 {
+		logrus.Fatal("ssh-connect-timeout must be at least 1 second")
+	}
+	if *sshKeepAlive < 0 {
+		logrus.Fatal("ssh-keepalive cannot be negative")
+	}
+
+	var sshKeyPassphrase []byte
+	if *sshKeyPassphraseEnv != "" {
+		passphrase, ok := os.LookupEnv(*sshKeyPassphraseEnv)
+		if !ok {
+			logrus.Fatalf("SSH key passphrase environment variable %q is not set", *sshKeyPassphraseEnv)
+		}
+		sshKeyPassphrase = []byte(passphrase)
+	}
 
 	var conn net.Conn
 	connectionEstablished := false
@@ -124,7 +150,26 @@ func main() {
 		var err error
 		var connSuccess bool
 
-		if ligoloUrl.IsWebsocket() {
+		if ligoloUrl.IsSSH() {
+			if *socksProxy != "" {
+				err = errors.New("the -proxy option is not supported with SSH transport")
+			} else if ligoloUrl.Host == "" {
+				err = errors.New("SSH connect address must include host and port")
+			} else {
+				connSuccess, err = sshconnect(context.Background(), sshtransport.ClientOptions{
+					Address:               ligoloUrl.Host,
+					User:                  *sshUser,
+					PrivateKeyPath:        *sshKey,
+					PrivateKeyPassphrase:  sshKeyPassphrase,
+					KnownHostsPath:        *sshKnownHosts,
+					HostKeyFingerprint:    *sshHostKeyFingerprint,
+					InsecureIgnoreHostKey: *sshInsecureIgnoreHostKey,
+					InsecureNoAuth:        *sshInsecureNoAuth,
+					ConnectTimeout:        time.Duration(*sshConnectTimeout) * time.Second,
+					KeepAliveInterval:     time.Duration(*sshKeepAlive) * time.Second,
+				})
+			}
+		} else if ligoloUrl.IsWebsocket() {
 			//websocket
 			connSuccess, err = wsconnect(&tlsConfig, *serverAddr, *socksProxy, *userAgent)
 		} else {
@@ -229,7 +274,7 @@ func sockDial(serverAddr string, socksProxy string, socksUser string, socksPass 
 }
 
 // connect is used when connecting using direct connection.
-func connect(conn net.Conn) (bool, error) {
+func connect(conn sshtransport.Conn) (bool, error) {
 	// Configure yamux with longer timeouts for multi-hop scenarios
 	yamuxConfig := yamux.DefaultConfig()
 	yamuxConfig.EnableKeepAlive = true
@@ -251,6 +296,20 @@ func connect(conn net.Conn) (bool, error) {
 		}
 		go agent.HandleConn(conn)
 	}
+}
+
+func sshconnect(ctx context.Context, options sshtransport.ClientOptions) (bool, error) {
+	conn, err := sshtransport.Dial(ctx, options)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close()
+
+	logrus.WithFields(logrus.Fields{
+		"remote":    conn.RemoteAddr(),
+		"transport": "ssh",
+	}).Info("SSH transport established")
+	return connect(conn)
 }
 
 func bind(config *tls.Config, bindAddr string) {
