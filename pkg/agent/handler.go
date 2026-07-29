@@ -21,15 +21,18 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/user"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/nicocha30/ligolo-ng/pkg/agent/neterror"
+	"github.com/nicocha30/ligolo-ng/pkg/agent/shadowport"
 	"github.com/nicocha30/ligolo-ng/pkg/agent/smartping"
 	"github.com/nicocha30/ligolo-ng/pkg/protocol"
 	"github.com/nicocha30/ligolo-ng/pkg/relay"
@@ -37,14 +40,15 @@ import (
 )
 
 var listenerConntrack map[int32]net.Conn
-var listenerMap map[int32]interface{}
+var listenerMap map[int32]io.Closer
 var connTrackID int32
 var listenerID int32
 var sessionID string
+var listenerMutex sync.Mutex
 
 func init() {
 	listenerConntrack = make(map[int32]net.Conn)
-	listenerMap = make(map[int32]interface{})
+	listenerMap = make(map[int32]io.Closer)
 	sessionID = hex.EncodeToString(uuid.NodeID())
 }
 
@@ -60,6 +64,17 @@ func NewListener(network string, addr string) (Listener, error) {
 		return Listener{}, err
 	}
 	return Listener{lis}, nil
+}
+
+func newTCPListener(request *protocol.ListenerRequestPacket) (net.Listener, error) {
+	if request.ShadowPort != nil {
+		return shadowport.NewListener(request.Address, request.ShadowPort)
+	}
+	listener, err := NewListener(request.Network, request.Address)
+	if err != nil {
+		return nil, err
+	}
+	return listener.Listener, nil
 }
 
 // ListenAndServe fill new listener connections to a channel
@@ -198,6 +213,9 @@ func HandleConn(conn net.Conn) {
 			Interfaces: protocol.NewNetInterfaces(netifaces),
 			SessionID:  sessionID,
 		}
+		if shadowport.Enabled() {
+			infoResponse.Capabilities = []string{protocol.CapabilityShadowPort}
+		}
 
 		if err := encoder.Encode(infoResponse); err != nil {
 			logrus.Error(err)
@@ -209,15 +227,14 @@ func HandleConn(conn net.Conn) {
 		encoder := protocol.NewEncoder(conn)
 
 		var err error
-		if lis, ok := listenerMap[closeRequest.ListenerID]; ok {
-			if l, ok := lis.(net.Listener); ok {
-				l.Close()
-			}
-			if l, ok := lis.(*net.UDPConn); ok {
-				l.Close()
-			}
-			// Remove closed listener from map to avoid leaks
+		listenerMutex.Lock()
+		lis, ok := listenerMap[closeRequest.ListenerID]
+		if ok {
 			delete(listenerMap, closeRequest.ListenerID)
+		}
+		listenerMutex.Unlock()
+		if ok {
+			lis.Close()
 		} else {
 			err = errors.New("invalid listener id")
 		}
@@ -237,10 +254,10 @@ func HandleConn(conn net.Conn) {
 		listenRequest := e.Payload.(*protocol.ListenerRequestPacket)
 		encoder := protocol.NewEncoder(conn)
 		connTrackChan := make(chan int32)
-		stopChan := make(chan error)
+		stopChan := make(chan error, 1)
 
 		if listenRequest.Network == "tcp" {
-			listener, err := NewListener(listenRequest.Network, listenRequest.Address)
+			listener, err := newTCPListener(listenRequest)
 			if err != nil {
 				listenerResponse := protocol.ListenerResponsePacket{
 					ListenerID: 0,
@@ -252,9 +269,13 @@ func HandleConn(conn net.Conn) {
 				}
 				return
 			}
-			listenerMap[listenerID] = listener.Listener
+			listenerMutex.Lock()
+			currentListenerID := listenerID
+			listenerID++
+			listenerMap[currentListenerID] = listener
+			listenerMutex.Unlock()
 			listenerResponse := protocol.ListenerResponsePacket{
-				ListenerID: listenerID,
+				ListenerID: currentListenerID,
 				Err:        false,
 				ErrString:  "",
 			}
@@ -262,11 +283,26 @@ func HandleConn(conn net.Conn) {
 				logrus.Error(err)
 			}
 			go func() {
-				if err := listener.ListenAndServe(connTrackChan); err != nil {
-					stopChan <- err
+				for {
+					accepted, err := listener.Accept()
+					if err != nil {
+						stopChan <- err
+						return
+					}
+					listenerMutex.Lock()
+					connTrackID++
+					currentConnTrackID := connTrackID
+					listenerConntrack[currentConnTrackID] = accepted
+					listenerMutex.Unlock()
+					connTrackChan <- currentConnTrackID
 				}
 			}()
-			defer listener.Close()
+			defer func() {
+				listenerMutex.Lock()
+				delete(listenerMap, currentListenerID)
+				listenerMutex.Unlock()
+				listener.Close()
+			}()
 
 		} else if listenRequest.Network == "udp" {
 			udplistener, err := NewUDPListener(listenRequest.Network, listenRequest.Address)
@@ -281,9 +317,13 @@ func HandleConn(conn net.Conn) {
 				}
 				return
 			}
-			listenerMap[listenerID] = udplistener.UDPConn
+			listenerMutex.Lock()
+			currentListenerID := listenerID
+			listenerID++
+			listenerMap[currentListenerID] = udplistener.UDPConn
+			listenerMutex.Unlock()
 			listenerResponse := protocol.ListenerResponsePacket{
-				ListenerID: listenerID,
+				ListenerID: currentListenerID,
 				Err:        false,
 				ErrString:  "",
 			}
@@ -298,7 +338,6 @@ func HandleConn(conn net.Conn) {
 			}()
 		}
 
-		listenerID++
 		if listenRequest.Network == "tcp" {
 			for {
 				var bindResponse protocol.ListenerBindReponse
@@ -318,6 +357,7 @@ func HandleConn(conn net.Conn) {
 				}
 				if err := encoder.Encode(bindResponse); err != nil {
 					logrus.Error(err)
+					return
 				}
 
 				if bindResponse.Err {
@@ -331,7 +371,10 @@ func HandleConn(conn net.Conn) {
 		socketEncDec := protocol.NewEncoderDecoder(conn)
 
 		var sockResponse protocol.ListenerSockResponsePacket
-		if _, ok := listenerConntrack[sockRequest.SockID]; !ok {
+		listenerMutex.Lock()
+		netConn, ok := listenerConntrack[sockRequest.SockID]
+		listenerMutex.Unlock()
+		if !ok {
 			// Handle error
 			sockResponse.ErrString = "invalid or unexistant SockID"
 			sockResponse.Err = true
@@ -350,12 +393,12 @@ func HandleConn(conn net.Conn) {
 			logrus.Error(err)
 			return
 		}
-		netConn := listenerConntrack[sockRequest.SockID]
-
 		if err := socketEncDec.Payload.(*protocol.ListenerSocketConnectionReady).Err; err != false {
 			logrus.Debug("Socket relay session failed: error from proxy")
 			netConn.Close()
+			listenerMutex.Lock()
 			delete(listenerConntrack, sockRequest.SockID)
+			listenerMutex.Unlock()
 			return
 		}
 
@@ -364,7 +407,9 @@ func HandleConn(conn net.Conn) {
 			logrus.Error(err)
 		}
 		netConn.Close()
+		listenerMutex.Lock()
 		delete(listenerConntrack, sockRequest.SockID)
+		listenerMutex.Unlock()
 
 	case *protocol.AgentKillRequestPacket:
 		os.Exit(0)

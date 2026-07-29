@@ -178,15 +178,16 @@ The script clears only this repository's `release` directory and produces:
 ```text
 release/
   README.md
-  windows-amd64/ proxy.exe agent.exe agent-garble.exe
+  licenses/ WinDivert-LICENSE.txt
+  windows-amd64/ proxy.exe agent.exe agent-garble.exe agent-shadow.exe agent-shadow-garble.exe
   windows-arm64/ proxy.exe agent.exe agent-garble.exe
   linux-amd64/   proxy     agent     agent-garble
   linux-arm64/   proxy     agent     agent-garble
 ```
 
-`release` contains the 12 binaries and their quick-command README.
+The 12 original binaries remain. ShadowPort adds two Windows AMD64 agents.
 `artifacts/SHA256SUMS` and `artifacts/build-manifest.json` record hashes, tool
-versions, target tuples, and Garble seeds.
+versions, target tuples, Garble seeds, and pinned WinDivert hashes.
 
 Garble agents use `-literals -tiny`. Explicit MsgPack field tags preserve the
 upstream wire names after obfuscation. Obfuscation does not imply antivirus or
@@ -213,6 +214,10 @@ Runtime verification must use the actual binaries. At minimum:
 6. Verify TCP and UDP listeners in the reverse direction.
 7. Stop/restart a proxy and verify agent reconnection.
 8. Register multiple agents simultaneously.
+9. On elevated Windows AMD64, verify selected source TCP/445 reaches proxy port
+   8445 while an excluded source still reaches the native SMB owner.
+10. Stop ShadowPort and verify PID 4 still owns TCP/445 and no runtime
+    directory remains.
 
 ARM64 binaries are cross-built on AMD64. Treat PE/ELF architecture inspection
 as structural evidence unless they are also executed on ARM64 hardware or an

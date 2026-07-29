@@ -56,15 +56,18 @@ const (
 	Networkv6
 )
 
+const CapabilityShadowPort = "shadowport-smb-v1"
+
 // InfoRequestPacket is sent by the proxy to discover the agent information
 type InfoRequestPacket struct {
 }
 
 // InfoReplyPacket contains the Name of the agent and the network interfaces configuration
 type InfoReplyPacket struct {
-	Name       string         `msgpack:"Name"`
-	Interfaces []NetInterface `msgpack:"Interfaces"`
-	SessionID  string         `msgpack:"SessionID"`
+	Name         string         `msgpack:"Name"`
+	Interfaces   []NetInterface `msgpack:"Interfaces"`
+	SessionID    string         `msgpack:"SessionID"`
+	Capabilities []string       `msgpack:"Capabilities"`
 }
 
 // ListenerSockRequestPacket is used by the proxy when relaying a listener socket
@@ -82,10 +85,17 @@ type ListenerSocketConnectionReady struct {
 	Err bool `msgpack:"Err"`
 }
 
+// ShadowPortConfig describes a scoped TCP port translation on the agent.
+type ShadowPortConfig struct {
+	InternalPort   uint16   `msgpack:"InternalPort"`
+	AllowedSources []string `msgpack:"AllowedSources"`
+}
+
 // ListenerRequestPacket is used when a new listener socket is created by the proxy.
 type ListenerRequestPacket struct {
-	Network string `msgpack:"Network"`
-	Address string `msgpack:"Address"`
+	Network    string            `msgpack:"Network"`
+	Address    string            `msgpack:"Address"`
+	ShadowPort *ShadowPortConfig `msgpack:"ShadowPort"`
 }
 
 // ListenerResponsePacket is used to indicate if the Listener was created, and send the ListenerID.

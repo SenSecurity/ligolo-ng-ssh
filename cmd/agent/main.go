@@ -38,6 +38,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/hashicorp/yamux"
 	"github.com/nicocha30/ligolo-ng/pkg/agent"
+	"github.com/nicocha30/ligolo-ng/pkg/agent/shadowport"
 	"github.com/nicocha30/ligolo-ng/pkg/sshtransport"
 	"github.com/sirupsen/logrus"
 	goproxy "golang.org/x/net/proxy"
@@ -73,6 +74,7 @@ func main() {
 	var sshInsecureNoAuth = flag.Bool("ssh-insecure-no-auth", false, "connect without SSH client authentication (dangerous; proxy must explicitly allow it)")
 	var sshConnectTimeout = flag.Int("ssh-connect-timeout", 20, "SSH TCP/handshake timeout in seconds")
 	var sshKeepAlive = flag.Int("ssh-keepalive", 30, "SSH keepalive interval in seconds (0 disables)")
+	var allowShadowPort = flag.Bool("allow-shadow-port", false, "allow elevated ShadowPort listeners (agent-shadow builds only)")
 
 	flag.Usage = func() {
 		fmt.Printf("Ligolo-ng %s / %s / %s\n", version, commit, date)
@@ -83,6 +85,7 @@ func main() {
 	}
 
 	flag.Parse()
+	shadowport.SetAllowed(*allowShadowPort)
 
 	if *versionFlag {
 		fmt.Printf("Ligolo-ng %s / %s / %s\n", version, commit, date)

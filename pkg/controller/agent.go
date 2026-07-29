@@ -27,14 +27,15 @@ import (
 )
 
 type LigoloAgent struct {
-	Name      string
-	Network   []protocol.NetInterface
-	Session   *yamux.Session
-	SessionID string
-	CloseChan chan bool `json:"-"`
-	Interface string
-	Running   bool
-	Listeners []*proxy.LigoloListener
+	Name         string
+	Network      []protocol.NetInterface
+	Capabilities []string
+	Session      *yamux.Session
+	SessionID    string
+	CloseChan    chan bool `json:"-"`
+	Interface    string
+	Running      bool
+	Listeners    []*proxy.LigoloListener
 }
 
 func (la *LigoloAgent) Alive() bool {
@@ -62,18 +63,39 @@ func (la *LigoloAgent) Kill() error {
 }
 
 func (la *LigoloAgent) AddListener(addr string, network string, to string) (*proxy.LigoloListener, error) {
+	return la.AddListenerWithShadowPort(addr, network, to, nil)
+}
+
+func (la *LigoloAgent) AddListenerWithShadowPort(addr string, network string, to string, shadowPort *protocol.ShadowPortConfig) (*proxy.LigoloListener, error) {
 	if _, _, err := net.SplitHostPort(addr); err != nil {
 		return nil, fmt.Errorf("invalid listener addr: %v", err)
 	}
 	if _, _, err := net.SplitHostPort(to); err != nil {
 		return nil, fmt.Errorf("invalid redirect addr: %v", err)
 	}
-	proxyListener, err := proxy.NewListener(la.Session, addr, network, to)
+	if shadowPort != nil {
+		if network != "tcp" {
+			return nil, fmt.Errorf("ShadowPort only supports TCP listeners")
+		}
+		if !la.HasCapability(protocol.CapabilityShadowPort) {
+			return nil, fmt.Errorf("agent does not advertise %s", protocol.CapabilityShadowPort)
+		}
+	}
+	proxyListener, err := proxy.NewListenerWithShadowPort(la.Session, addr, network, to, shadowPort)
 	if err != nil {
 		return nil, err
 	}
 	la.Listeners = append(la.Listeners, &proxyListener)
 	return &proxyListener, nil
+}
+
+func (la *LigoloAgent) HasCapability(capability string) bool {
+	for _, advertised := range la.Capabilities {
+		if advertised == capability {
+			return true
+		}
+	}
+	return false
 }
 
 func (la *LigoloAgent) GetListener(id int) *proxy.LigoloListener {
@@ -104,23 +126,25 @@ func (la *LigoloAgent) String() string {
 
 func (la *LigoloAgent) MarshalJSON() ([]byte, error) {
 	type Session struct {
-		Name       string
-		Network    []protocol.NetInterface
-		SessionID  string
-		RemoteAddr string
-		Interface  string
-		Running    bool
-		Listeners  []*proxy.LigoloListener
+		Name         string
+		Network      []protocol.NetInterface
+		Capabilities []string
+		SessionID    string
+		RemoteAddr   string
+		Interface    string
+		Running      bool
+		Listeners    []*proxy.LigoloListener
 	}
 
 	return json.Marshal(Session{
-		Name:       la.Name,
-		Running:    la.Running,
-		Listeners:  la.Listeners,
-		Network:    la.Network,
-		Interface:  la.Interface,
-		SessionID:  la.SessionID,
-		RemoteAddr: la.Session.RemoteAddr().String(),
+		Name:         la.Name,
+		Running:      la.Running,
+		Listeners:    la.Listeners,
+		Network:      la.Network,
+		Capabilities: la.Capabilities,
+		Interface:    la.Interface,
+		SessionID:    la.SessionID,
+		RemoteAddr:   la.Session.RemoteAddr().String(),
 	})
 }
 
@@ -147,10 +171,11 @@ func NewAgent(session *yamux.Session) (*LigoloAgent, error) {
 	reply := protocolDecoder.Payload.(*protocol.InfoReplyPacket)
 
 	return &LigoloAgent{
-		Name:      reply.Name,
-		Network:   reply.Interfaces,
-		Session:   session,
-		SessionID: reply.SessionID,
-		CloseChan: make(chan bool),
+		Name:         reply.Name,
+		Network:      reply.Interfaces,
+		Capabilities: append([]string(nil), reply.Capabilities...),
+		Session:      session,
+		SessionID:    reply.SessionID,
+		CloseChan:    make(chan bool),
 	}, nil
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/gin-contrib/static"
 	"github.com/gin-gonic/gin"
 	"github.com/nicocha30/ligolo-ng/cmd/proxy/config"
+	"github.com/nicocha30/ligolo-ng/pkg/protocol"
 	"github.com/nicocha30/ligolo-ng/pkg/proxy/netinfo"
 	"github.com/nicocha30/ligolo-ng/pkg/tlsutils"
 	"github.com/nicocha30/ligolo-ng/web"
@@ -310,6 +311,7 @@ func StartLigoloApi() {
 				ListenerAddr string
 				RedirectAddr string
 				Online       bool
+				ShadowPort   *protocol.ShadowPortConfig
 			}
 			var listeners []ListenerInfo
 			for agentId, agent := range AgentList {
@@ -324,6 +326,7 @@ func StartLigoloApi() {
 						ListenerAddr: listener.ListenerAddr(),
 						RedirectAddr: listener.RedirectAddr(),
 						Online:       agent.Alive(),
+						ShadowPort:   listener.ShadowPort(),
 					})
 				}
 			}
@@ -341,11 +344,22 @@ func StartLigoloApi() {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
-			if _, ok := AgentList[listenerDeleteRequest.AgentID]; !ok {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid agent"})
+			agent, ok := AgentList[listenerDeleteRequest.AgentID]
+			if !ok {
+				c.JSON(http.StatusNotFound, gin.H{"error": "invalid agent"})
 				return
 			}
-			AgentList[listenerDeleteRequest.AgentID].DeleteListener(listenerDeleteRequest.ListenerID)
+			listener := agent.GetListener(listenerDeleteRequest.ListenerID)
+			if listener == nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "invalid listener"})
+				return
+			}
+			if err := listener.Stop(); err != nil {
+				c.Error(err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			agent.DeleteListener(listenerDeleteRequest.ListenerID)
 			c.JSON(http.StatusOK, gin.H{"message": "listener deleted"})
 		})
 
@@ -355,6 +369,7 @@ func StartLigoloApi() {
 				ListenerAddr string
 				RedirectAddr string
 				Network      string
+				ShadowPort   *protocol.ShadowPortConfig
 			}
 
 			var listenerRequest ListenerRequest
@@ -367,7 +382,7 @@ func StartLigoloApi() {
 				return
 			}
 			CurrentAgent := AgentList[listenerRequest.AgentID]
-			proxyListener, err := CurrentAgent.AddListener(listenerRequest.ListenerAddr, listenerRequest.Network, listenerRequest.RedirectAddr)
+			proxyListener, err := CurrentAgent.AddListenerWithShadowPort(listenerRequest.ListenerAddr, listenerRequest.Network, listenerRequest.RedirectAddr, listenerRequest.ShadowPort)
 			if err != nil {
 				c.Error(err)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
