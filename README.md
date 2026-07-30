@@ -40,7 +40,12 @@ release.
 
 ## Copy/paste SSH recipes
 
-Pick one mode. Do every block in that mode.
+Pick one mode. In that mode:
+
+1. Run `Setup` and `Start proxy` for your proxy OS.
+2. Run the target block for your target OS.
+
+Proxy and target OS can differ.
 
 Replace:
 
@@ -48,6 +53,14 @@ Replace:
 - `SHA256:PROXY_FINGERPRINT`
 
 SSH proxy always needs a host key. "No key" below means no agent key on target.
+
+Setup assumes the named key files do not exist. If they exist, stop and reuse
+the complete existing key set or use a fresh directory. Do not overwrite keys
+used by a running proxy.
+
+Modes 2 and 3 accept unauthenticated agents. `0.0.0.0:22` exposes SSH on every
+interface. Restrict TCP/22 to authorized source IPs with a firewall. Stop proxy
+when assessment ends.
 
 <details open>
 <summary><strong>Mode 1: agent key + proxy fingerprint</strong></summary>
@@ -66,8 +79,8 @@ Copy-Item .\keys\agent.pub .\keys\authorized_keys
 ssh-keygen -lf .\keys\proxy-host.pub -E sha256
 ```
 
-Press Enter twice for empty passphrases. Copy `agent.exe` and
-`.\keys\agent` to target. Name private key `agent`.
+For each `ssh-keygen` command, press Enter twice for empty passphrase. Copy
+`agent.exe` and `.\keys\agent` to target. Name private key `agent`.
 
 Start proxy:
 
