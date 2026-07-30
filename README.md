@@ -498,6 +498,200 @@ Both sides must opt in. A no-auth agent is rejected by a normal proxy.
 
 ## ShadowPort: receive selected SMB traffic while Windows owns port 445
 
+### ShadowPort copy/paste recipes
+
+ShadowPort target is Windows AMD64. Replace:
+
+- `PROXY_IP`
+- `SHA256:PROXY_FINGERPRINT`
+
+Use `agent-shadow-garble.exe` instead of `agent-shadow.exe` for Garble build.
+
+<details open>
+<summary><strong>Mode 1: agent key + proxy fingerprint</strong></summary>
+
+Target files: `agent-shadow.exe` + private `agent` key.
+
+#### Windows proxy
+
+Setup:
+
+```powershell
+New-Item -ItemType Directory -Force .\keys
+ssh-keygen -t ed25519 -f .\keys\proxy-host
+ssh-keygen -t ed25519 -f .\keys\agent
+Copy-Item .\keys\agent.pub .\keys\authorized_keys
+ssh-keygen -lf .\keys\proxy-host.pub -E sha256
+```
+
+Start proxy:
+
+```powershell
+.\proxy.exe `
+  -laddr ssh://0.0.0.0:22 `
+  -ssh-user ligolo `
+  -ssh-host-key .\keys\proxy-host `
+  -ssh-authorized-keys .\keys\authorized_keys
+```
+
+#### Linux proxy
+
+Setup:
+
+```bash
+mkdir -p ./keys
+ssh-keygen -t ed25519 -f ./keys/proxy-host -N ''
+ssh-keygen -t ed25519 -f ./keys/agent -N ''
+cp ./keys/agent.pub ./keys/authorized_keys
+ssh-keygen -lf ./keys/proxy-host.pub -E sha256
+```
+
+Start proxy:
+
+```bash
+sudo ./proxy \
+  -laddr ssh://0.0.0.0:22 \
+  -ssh-user ligolo \
+  -ssh-host-key ./keys/proxy-host \
+  -ssh-authorized-keys ./keys/authorized_keys
+```
+
+Windows target:
+
+```powershell
+.\agent-shadow.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-key .\agent `
+  -ssh-host-key-fingerprint "SHA256:PROXY_FINGERPRINT" `
+  -allow-shadow-port `
+  -retry `
+  -reconnect
+```
+
+</details>
+
+<details>
+<summary><strong>Mode 2: no agent key + proxy fingerprint</strong></summary>
+
+Target file: `agent-shadow.exe` only. Proxy identity still verified.
+
+#### Windows proxy
+
+Setup:
+
+```powershell
+New-Item -ItemType Directory -Force .\keys
+ssh-keygen -t ed25519 -f .\keys\proxy-host
+ssh-keygen -lf .\keys\proxy-host.pub -E sha256
+```
+
+Start proxy:
+
+```powershell
+.\proxy.exe `
+  -laddr ssh://0.0.0.0:22 `
+  -ssh-user ligolo `
+  -ssh-host-key .\keys\proxy-host `
+  -ssh-insecure-allow-no-auth
+```
+
+#### Linux proxy
+
+Setup:
+
+```bash
+mkdir -p ./keys
+ssh-keygen -t ed25519 -f ./keys/proxy-host -N ''
+ssh-keygen -lf ./keys/proxy-host.pub -E sha256
+```
+
+Start proxy:
+
+```bash
+sudo ./proxy \
+  -laddr ssh://0.0.0.0:22 \
+  -ssh-user ligolo \
+  -ssh-host-key ./keys/proxy-host \
+  -ssh-insecure-allow-no-auth
+```
+
+Windows target:
+
+```powershell
+.\agent-shadow.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-insecure-no-auth `
+  -ssh-host-key-fingerprint "SHA256:PROXY_FINGERPRINT" `
+  -allow-shadow-port `
+  -retry `
+  -reconnect
+```
+
+</details>
+
+<details>
+<summary><strong>Mode 3: binary only + no proxy pinning</strong></summary>
+
+Target file: `agent-shadow.exe` only. No agent or proxy authentication.
+
+#### Windows proxy
+
+Setup:
+
+```powershell
+New-Item -ItemType Directory -Force .\keys
+ssh-keygen -t ed25519 -f .\keys\proxy-host
+```
+
+Start proxy:
+
+```powershell
+.\proxy.exe `
+  -laddr ssh://0.0.0.0:22 `
+  -ssh-user ligolo `
+  -ssh-host-key .\keys\proxy-host `
+  -ssh-insecure-allow-no-auth
+```
+
+#### Linux proxy
+
+Setup:
+
+```bash
+mkdir -p ./keys
+ssh-keygen -t ed25519 -f ./keys/proxy-host -N ''
+```
+
+Start proxy:
+
+```bash
+sudo ./proxy \
+  -laddr ssh://0.0.0.0:22 \
+  -ssh-user ligolo \
+  -ssh-host-key ./keys/proxy-host \
+  -ssh-insecure-allow-no-auth
+```
+
+Windows target:
+
+```powershell
+.\agent-shadow.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-insecure-no-auth `
+  -ssh-insecure-ignore-host-key `
+  -allow-shadow-port `
+  -retry `
+  -reconnect
+```
+
+</details>
+
+<details>
+<summary>ShadowPort behavior, SMB listener, checks, and cleanup</summary>
+
 ShadowPort is available only in the separate Windows AMD64 binaries:
 
 - `agent-shadow.exe`
@@ -649,6 +843,8 @@ Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ligolo-shadowport-*' |
 
 The Web UI exposes the same settings under **Add New > ShadowPort** only when
 the selected agent advertises `shadowport-smb-v1`.
+
+</details>
 
 ## Start the tunnel
 
