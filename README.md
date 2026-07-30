@@ -41,6 +41,245 @@ The Windows AMD64 bundle also contains `agent-shadow.exe` and
 Individual Windows executables and `SHA256SUMS.txt` are also attached to the
 release.
 
+## Copy/paste SSH recipes
+
+Pick one mode. Do every block in that mode.
+
+Replace:
+
+- `PROXY_IP`
+- `SHA256:PROXY_FINGERPRINT`
+
+SSH proxy always needs a host key. "No key" below means no agent key on target.
+
+<details open>
+<summary><strong>Mode 1: agent key + proxy fingerprint</strong></summary>
+
+Target files: agent binary + private `agent` key.
+
+#### Windows proxy
+
+Setup:
+
+```powershell
+New-Item -ItemType Directory -Force .\keys
+ssh-keygen -t ed25519 -f .\keys\proxy-host
+ssh-keygen -t ed25519 -f .\keys\agent
+Copy-Item .\keys\agent.pub .\keys\authorized_keys
+ssh-keygen -lf .\keys\proxy-host.pub -E sha256
+```
+
+Press Enter twice for empty passphrases. Copy `agent.exe` and
+`.\keys\agent` to target. Name private key `agent`.
+
+Start proxy:
+
+```powershell
+.\proxy.exe `
+  -laddr ssh://0.0.0.0:22 `
+  -ssh-user ligolo `
+  -ssh-host-key .\keys\proxy-host `
+  -ssh-authorized-keys .\keys\authorized_keys
+```
+
+Windows target:
+
+```powershell
+.\agent.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-key .\agent `
+  -ssh-host-key-fingerprint "SHA256:PROXY_FINGERPRINT" `
+  -retry `
+  -reconnect
+```
+
+#### Linux proxy
+
+Setup:
+
+```bash
+mkdir -p ./keys
+ssh-keygen -t ed25519 -f ./keys/proxy-host -N ''
+ssh-keygen -t ed25519 -f ./keys/agent -N ''
+cp ./keys/agent.pub ./keys/authorized_keys
+ssh-keygen -lf ./keys/proxy-host.pub -E sha256
+```
+
+Copy `agent` binary and `./keys/agent` private key to target. Name private key
+`agent-key`.
+
+Start proxy:
+
+```bash
+sudo ./proxy \
+  -laddr ssh://0.0.0.0:22 \
+  -ssh-user ligolo \
+  -ssh-host-key ./keys/proxy-host \
+  -ssh-authorized-keys ./keys/authorized_keys
+```
+
+Linux target:
+
+```bash
+./agent \
+  -connect ssh://PROXY_IP:22 \
+  -ssh-user ligolo \
+  -ssh-key ./agent-key \
+  -ssh-host-key-fingerprint 'SHA256:PROXY_FINGERPRINT' \
+  -retry \
+  -reconnect
+```
+
+</details>
+
+<details>
+<summary><strong>Mode 2: no agent key + proxy fingerprint</strong></summary>
+
+Target file: agent binary only. Proxy identity still verified.
+
+#### Windows proxy
+
+Setup:
+
+```powershell
+New-Item -ItemType Directory -Force .\keys
+ssh-keygen -t ed25519 -f .\keys\proxy-host
+ssh-keygen -lf .\keys\proxy-host.pub -E sha256
+```
+
+Press Enter twice for empty passphrase.
+
+Start proxy:
+
+```powershell
+.\proxy.exe `
+  -laddr ssh://0.0.0.0:22 `
+  -ssh-user ligolo `
+  -ssh-host-key .\keys\proxy-host `
+  -ssh-insecure-allow-no-auth
+```
+
+Windows target:
+
+```powershell
+.\agent.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-insecure-no-auth `
+  -ssh-host-key-fingerprint "SHA256:PROXY_FINGERPRINT" `
+  -retry `
+  -reconnect
+```
+
+#### Linux proxy
+
+Setup:
+
+```bash
+mkdir -p ./keys
+ssh-keygen -t ed25519 -f ./keys/proxy-host -N ''
+ssh-keygen -lf ./keys/proxy-host.pub -E sha256
+```
+
+Start proxy:
+
+```bash
+sudo ./proxy \
+  -laddr ssh://0.0.0.0:22 \
+  -ssh-user ligolo \
+  -ssh-host-key ./keys/proxy-host \
+  -ssh-insecure-allow-no-auth
+```
+
+Linux target:
+
+```bash
+./agent \
+  -connect ssh://PROXY_IP:22 \
+  -ssh-user ligolo \
+  -ssh-insecure-no-auth \
+  -ssh-host-key-fingerprint 'SHA256:PROXY_FINGERPRINT' \
+  -retry \
+  -reconnect
+```
+
+</details>
+
+<details>
+<summary><strong>Mode 3: binary only + no proxy pinning</strong></summary>
+
+Target file: agent binary only. Fastest mode. No agent or proxy authentication.
+
+#### Windows proxy
+
+Setup:
+
+```powershell
+New-Item -ItemType Directory -Force .\keys
+ssh-keygen -t ed25519 -f .\keys\proxy-host
+```
+
+Press Enter twice for empty passphrase.
+
+Start proxy:
+
+```powershell
+.\proxy.exe `
+  -laddr ssh://0.0.0.0:22 `
+  -ssh-user ligolo `
+  -ssh-host-key .\keys\proxy-host `
+  -ssh-insecure-allow-no-auth
+```
+
+Windows target:
+
+```powershell
+.\agent.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-insecure-no-auth `
+  -ssh-insecure-ignore-host-key `
+  -retry `
+  -reconnect
+```
+
+#### Linux proxy
+
+Setup:
+
+```bash
+mkdir -p ./keys
+ssh-keygen -t ed25519 -f ./keys/proxy-host -N ''
+```
+
+Start proxy:
+
+```bash
+sudo ./proxy \
+  -laddr ssh://0.0.0.0:22 \
+  -ssh-user ligolo \
+  -ssh-host-key ./keys/proxy-host \
+  -ssh-insecure-allow-no-auth
+```
+
+Linux target:
+
+```bash
+./agent \
+  -connect ssh://PROXY_IP:22 \
+  -ssh-user ligolo \
+  -ssh-insecure-no-auth \
+  -ssh-insecure-ignore-host-key \
+  -retry \
+  -reconnect
+```
+
+</details>
+
+<details>
+<summary>Detailed SSH setup and security notes</summary>
+
 ## Choose an SSH mode
 
 | Mode | Files required on target | Agent authenticated | Proxy verified |
@@ -254,6 +493,8 @@ man-in-the-middle can impersonate the proxy. Restrict the listener with
 firewall rules and disable no-auth mode after the assessment.
 
 Both sides must opt in. A no-auth agent is rejected by a normal proxy.
+
+</details>
 
 ## ShadowPort: receive selected SMB traffic while Windows owns port 445
 
