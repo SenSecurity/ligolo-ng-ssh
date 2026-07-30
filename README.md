@@ -141,6 +141,16 @@ Linux:
 
 ## No agent key: send only the binary
 
+No-key mode requires an explicit flag on both sides. The flag names are
+different:
+
+- Proxy: `-ssh-insecure-allow-no-auth`
+- Normal or ShadowPort agent: `-ssh-insecure-no-auth`
+
+The proxy command below is required for both the fingerprint-pinned and
+zero-file agent commands. A no-key agent cannot connect to a proxy started
+without `-ssh-insecure-allow-no-auth`.
+
 Generate only the proxy host key:
 
 PowerShell:
