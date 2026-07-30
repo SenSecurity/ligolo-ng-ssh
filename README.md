@@ -294,6 +294,30 @@ firewall cmdlets and installs no additional dependency.
 
 ### Agent without an SSH key
 
+Start the proxy with no-auth explicitly enabled. This proxy command is the
+same for normal and ShadowPort agents; `-allow-shadow-port` belongs only on the
+ShadowPort agent.
+
+Windows proxy:
+
+```powershell
+.\proxy.exe `
+  -laddr ssh://0.0.0.0:22 `
+  -ssh-user ligolo `
+  -ssh-host-key .\keys\proxy-host `
+  -ssh-insecure-allow-no-auth
+```
+
+Linux proxy:
+
+```bash
+sudo ./proxy \
+  -laddr ssh://0.0.0.0:22 \
+  -ssh-user ligolo \
+  -ssh-host-key ./keys/proxy-host \
+  -ssh-insecure-allow-no-auth
+```
+
 Pinned proxy fingerprint:
 
 ```powershell
