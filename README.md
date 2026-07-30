@@ -513,12 +513,26 @@ Both sides must opt in. A no-auth agent is rejected by a normal proxy.
 
 ### ShadowPort copy/paste recipes
 
-ShadowPort target is Windows AMD64. Replace:
+ShadowPort target is Windows AMD64. Run target command from elevated
+Administrator PowerShell. SYSTEM is not required.
+
+Replace:
 
 - `PROXY_IP`
 - `SHA256:PROXY_FINGERPRINT`
 
 Use `agent-shadow-garble.exe` instead of `agent-shadow.exe` for Garble build.
+
+Setup assumes the named key files do not exist. If they exist, stop and reuse
+the complete existing key set or use a fresh directory. Do not overwrite keys
+used by a running proxy.
+
+For each Windows `ssh-keygen` command, press Enter twice for empty passphrase.
+Shown commands do not include passphrase environment flags.
+
+Modes 2 and 3 accept unauthenticated agents. `0.0.0.0:22` exposes SSH on every
+interface. Restrict TCP/22 to authorized source IPs with a firewall. Stop proxy
+when assessment ends.
 
 <details open>
 <summary><strong>Mode 1: agent key + proxy fingerprint</strong></summary>
@@ -569,7 +583,7 @@ sudo ./proxy \
   -ssh-authorized-keys ./keys/authorized_keys
 ```
 
-Windows target:
+Windows target (elevated Administrator PowerShell):
 
 ```powershell
 .\agent-shadow.exe `
@@ -629,7 +643,7 @@ sudo ./proxy \
   -ssh-insecure-allow-no-auth
 ```
 
-Windows target:
+Windows target (elevated Administrator PowerShell):
 
 ```powershell
 .\agent-shadow.exe `
@@ -687,7 +701,7 @@ sudo ./proxy \
   -ssh-insecure-allow-no-auth
 ```
 
-Windows target:
+Windows target (elevated Administrator PowerShell):
 
 ```powershell
 .\agent-shadow.exe `
