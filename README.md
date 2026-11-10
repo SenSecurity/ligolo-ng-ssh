@@ -732,14 +732,19 @@ replace, or reconfigure the service owned by PID 4.
 
 ShadowPort requires an elevated Administrator token; SYSTEM is not required.
 The target receives one EXE. The official signed WinDivert 2.2.2 AMD64 driver
-and its DLL are embedded in that EXE, hash-checked, extracted into a protected
-temporary directory only when a ShadowPort listener starts, and removed when
-the listener stops. A supported Windows driver cannot be loaded without
-materializing it on disk. Abruptly killing the process can leave that temporary
-directory behind. The agent also creates a temporary Windows Firewall allow
+and its DLL are embedded in that EXE, hash-checked, extracted into a randomly
+named temporary directory only when a ShadowPort listener starts, and wiped and
+removed when the listener stops. The official DLL requires the canonical
+`WinDivert.dll`/`WinDivert64.sys` names next to itself, so the artifacts cannot
+be renamed; the kernel driver image is deleted from disk as soon as the driver
+service has started, and the remaining files are overwritten with zeros before
+removal. A supported Windows driver cannot be loaded without materializing it
+on disk, and abruptly killing the process can leave residue behind (see the
+residue check below). The agent also creates a temporary Windows Firewall allow
 rule scoped to the exact internal IP, port, and source allowlist; it removes
-the rule on listener shutdown. This uses the built-in Windows PowerShell
-firewall cmdlets and installs no additional dependency.
+the rule on listener shutdown. The rule is registered through the native
+Windows Firewall COM API without spawning PowerShell, and its name and display
+name are one random hex token that does not identify the tool.
 
 ### Agent with an SSH key
 
@@ -853,18 +858,27 @@ Inspect the expected state from an elevated Windows PowerShell:
 Get-NetTCPConnection -State Listen |
   Where-Object LocalPort -In 445,8445 |
   Format-Table LocalAddress,LocalPort,OwningProcess
-Get-NetFirewallRule -DisplayName 'Ligolo ShadowPort *' -ErrorAction SilentlyContinue
-Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ligolo-shadowport-*'
+Get-NetFirewallRule | Where-Object DisplayName -match '^[0-9a-f]{16}$'
+Get-ChildItem -Directory -LiteralPath $env:TEMP |
+  Where-Object { Test-Path (Join-Path $_.FullName 'WinDivert.dll') }
 ```
 
-After `listener_stop`, the last two commands should return nothing and PID 4
-should still own TCP/445. If the process was killed and normal cleanup could not
-run, remove only ShadowPort residue from an elevated PowerShell:
+While a listener is active, the second query shows one scoped inbound rule
+named with 16 hex characters, and the third shows one directory holding
+`WinDivert.dll` (the driver image file is already deleted at that point). A
+machine-wide `WinDivert` driver service, registered by the official DLL,
+exists while any filter handle is open; the DLL uninstalls it when the last
+handle closes. After `listener_stop`, all three runtime queries should be
+empty and PID 4 should still own TCP/445. If the process was killed and normal
+cleanup could not run, remove only ShadowPort residue from an elevated
+PowerShell; review each rule's port and address scope first, because other
+software can also use hex-only names:
 
 ```powershell
-Get-NetFirewallRule -Name 'LigoloShadowPort-*' -ErrorAction SilentlyContinue |
+Get-NetFirewallRule | Where-Object DisplayName -match '^[0-9a-f]{16}$' |
   Remove-NetFirewallRule
-Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ligolo-shadowport-*' |
+Get-ChildItem -Directory -LiteralPath $env:TEMP |
+  Where-Object { Test-Path (Join-Path $_.FullName 'WinDivert.dll') } |
   Remove-Item -Recurse -Force
 ```
 

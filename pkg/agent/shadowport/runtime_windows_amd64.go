@@ -3,14 +3,12 @@
 package shadowport
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -37,6 +35,7 @@ type winDivertAPI struct {
 	send          *windows.Proc
 	close         *windows.Proc
 	calcChecksums *windows.Proc
+	driverPath    string
 }
 
 type divertHandle struct {
@@ -56,66 +55,8 @@ var sharedRuntime = struct {
 	refs int
 }{}
 
-type windowsFirewallPermit struct {
-	name           string
-	powerShellPath string
-	closeOnce      sync.Once
-}
-
 func supported() bool {
 	return true
-}
-
-func newFirewallPermit(scope listenerScope, internalPort uint16) (packetDivert, error) {
-	systemDirectory, err := windows.GetSystemDirectory()
-	if err != nil {
-		return nil, fmt.Errorf("resolve Windows system directory: %w", err)
-	}
-	powerShellPath := filepath.Join(systemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe")
-	randomBytes := make([]byte, 8)
-	if _, err := rand.Read(randomBytes); err != nil {
-		return nil, fmt.Errorf("generate firewall rule identifier: %w", err)
-	}
-	identifier := hex.EncodeToString(randomBytes)
-	name := "LigoloShadowPort-" + identifier
-	remoteAddresses := make([]string, 0, len(scope.sources))
-	for _, source := range scope.sources {
-		remoteAddresses = append(remoteAddresses, "'"+source.String()+"'")
-	}
-	command := fmt.Sprintf(
-		"New-NetFirewallRule -Name '%s' -DisplayName 'Ligolo ShadowPort %s' "+
-			"-Direction Inbound -Action Allow -Enabled True -Profile Any -Protocol TCP "+
-			"-LocalAddress '%s' -LocalPort %d -RemoteAddress @(%s) -ErrorAction Stop | Out-Null",
-		name, identifier, scope.publicAddress, internalPort, strings.Join(remoteAddresses, ","),
-	)
-	if output, err := runPowerShell(powerShellPath, command); err != nil {
-		return nil, fmt.Errorf("create scoped ShadowPort firewall rule: %w: %s", err, output)
-	}
-	logrus.WithField("rule", name).Info("ShadowPort temporary firewall rule created")
-	return &windowsFirewallPermit{name: name, powerShellPath: powerShellPath}, nil
-}
-
-func (f *windowsFirewallPermit) Close() error {
-	var closeErr error
-	f.closeOnce.Do(func() {
-		output, err := runPowerShell(
-			f.powerShellPath,
-			fmt.Sprintf("Remove-NetFirewallRule -Name '%s' -ErrorAction Stop", f.name),
-		)
-		if err != nil {
-			closeErr = fmt.Errorf("remove ShadowPort firewall rule %q: %w: %s", f.name, err, output)
-			return
-		}
-		logrus.WithField("rule", f.name).Info("ShadowPort temporary firewall rule removed")
-	})
-	return closeErr
-}
-
-func runPowerShell(path, script string) (string, error) {
-	command := exec.Command(path, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script)
-	command.SysProcAttr = &windows.SysProcAttr{HideWindow: true}
-	output, err := command.CombinedOutput()
-	return strings.TrimSpace(string(output)), err
 }
 
 func newPacketDivert(scope listenerScope, internalPort uint16, translator *Translator) (packetDivert, error) {
@@ -151,11 +92,12 @@ func newPacketDivert(scope listenerScope, internalPort uint16, translator *Trans
 		translator: translator,
 		done:       make(chan struct{}),
 	}
+	api.hideDriverFile()
 	divert.wait.Add(3)
 	go divert.packetLoop(inbound, false)
 	go divert.packetLoop(outbound, true)
 	go divert.expiryLoop()
-	logrus.Info("ShadowPort WinDivert diversion activated")
+	logrus.Info("Scoped packet diversion activated")
 	return divert, nil
 }
 
@@ -180,25 +122,25 @@ func (d *divertHandle) packetLoop(handle windows.Handle, outbound bool) {
 		if !ok {
 			if err != nil && !errors.Is(err, windows.ERROR_INVALID_HANDLE) &&
 				!errors.Is(err, windows.ERROR_OPERATION_ABORTED) {
-				logrus.WithError(err).Debug("ShadowPort receive loop stopped")
+				logrus.WithError(err).Debug("Divert receive loop stopped")
 			}
 			return
 		}
 		current := packet[:recvLength]
 		decision := d.translator.Translate(current, outbound, time.Now())
 		if decision == CapacityExceeded {
-			logrus.Warn("ShadowPort flow table capacity reached; dropping new selected flow")
+			logrus.Warn("Flow table capacity reached; dropping new selected flow")
 			continue
 		}
 		if decision == Rewritten {
 			if err := d.api.calculateChecksums(current, &address); err != nil {
-				logrus.WithError(err).Error("ShadowPort checksum recalculation failed; dropping packet")
+				logrus.WithError(err).Error("Checksum recalculation failed; dropping packet")
 				continue
 			}
 		}
 		if err := d.api.sendPacket(handle, current, &address); err != nil {
 			if !errors.Is(err, windows.ERROR_INVALID_HANDLE) {
-				logrus.WithError(err).Debug("ShadowPort reinjection stopped")
+				logrus.WithError(err).Debug("Divert reinjection stopped")
 			}
 			return
 		}
@@ -251,7 +193,7 @@ func acquireRuntime() (*winDivertAPI, error) {
 	sharedRuntime.api = api
 	sharedRuntime.dir = dir
 	sharedRuntime.refs = 1
-	logrus.WithField("runtime_dir", dir).Info("ShadowPort WinDivert runtime prepared")
+	logrus.Debug("Divert runtime prepared")
 	return api, nil
 }
 
@@ -271,11 +213,11 @@ func releaseRuntime() error {
 	sharedRuntime.dir = ""
 
 	releaseErr := api.dll.Release()
-	removeErr := os.RemoveAll(dir)
+	removeErr := wipeRuntimeArtifacts(dir)
 	if removeErr != nil {
-		logrus.WithError(removeErr).WithField("runtime_dir", dir).Warn("ShadowPort runtime residue remains")
+		logrus.WithError(removeErr).Warn("Divert runtime residue remains after cleanup")
 	} else {
-		logrus.WithField("runtime_dir", dir).Info("ShadowPort WinDivert runtime removed")
+		logrus.Debug("Divert runtime removed")
 	}
 	return errors.Join(releaseErr, removeErr)
 }
@@ -287,12 +229,15 @@ func prepareRuntime() (*winDivertAPI, string, error) {
 	if err := verifyBytes(embeddedWinDivertDriver, winDivertDriverSHA256, "WinDivert64.sys"); err != nil {
 		return nil, "", err
 	}
-	dir, err := os.MkdirTemp("", "ligolo-shadowport-")
+	// The directory name is a bare random value with no product prefix. The
+	// official DLL locates the driver image next to itself and requires the
+	// canonical file names, so the artifacts themselves cannot be renamed.
+	dir, err := os.MkdirTemp("", "")
 	if err != nil {
 		return nil, "", fmt.Errorf("create ShadowPort runtime directory: %w", err)
 	}
 	fail := func(err error) (*winDivertAPI, string, error) {
-		os.RemoveAll(dir)
+		wipeRuntimeArtifacts(dir)
 		return nil, "", err
 	}
 	if err := hardenDirectory(dir); err != nil {
@@ -303,9 +248,11 @@ func prepareRuntime() (*winDivertAPI, string, error) {
 	if err := os.WriteFile(dllPath, embeddedWinDivertDLL, 0o600); err != nil {
 		return fail(fmt.Errorf("extract WinDivert.dll: %w", err))
 	}
+	markTemporary(dllPath)
 	if err := os.WriteFile(driverPath, embeddedWinDivertDriver, 0o600); err != nil {
 		return fail(fmt.Errorf("extract WinDivert64.sys: %w", err))
 	}
+	markTemporary(driverPath)
 	if err := verifyFile(dllPath, winDivertDLLSHA256); err != nil {
 		return fail(err)
 	}
@@ -319,7 +266,85 @@ func prepareRuntime() (*winDivertAPI, string, error) {
 	if err != nil {
 		return fail(err)
 	}
+	api.driverPath = driverPath
 	return api, dir, nil
+}
+
+// hideDriverFile removes the driver image from disk once the kernel service
+// has been installed and started for the current handles. The service keeps
+// running from the image the kernel already loaded, so the file is not read
+// again until the last filter handle closes and the DLL uninstalls the
+// service. If the removal fails (for example a short-lived antivirus scan
+// holds the file), the teardown wipe still clears it. When the runtime is
+// re-acquired after every handle was closed, prepareRuntime extracts the
+// files again.
+func (api *winDivertAPI) hideDriverFile() {
+	sharedRuntime.Lock()
+	defer sharedRuntime.Unlock()
+	if api.driverPath == "" {
+		return
+	}
+	if err := os.Remove(api.driverPath); err == nil {
+		api.driverPath = ""
+	}
+}
+
+// wipeRuntimeArtifacts overwrites the dropped runtime files before removing
+// the directory, so no intact driver or DLL image remains on disk after a
+// normal teardown. The retry loop covers short-lived antivirus locks; if the
+// directory still survives, the caller reports residue.
+func wipeRuntimeArtifacts(dir string) error {
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				zeroFile(filepath.Join(dir, entry.Name()))
+			}
+		}
+	}
+	var removeErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if removeErr = os.RemoveAll(dir); removeErr == nil {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return removeErr
+}
+
+func zeroFile(path string) {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return
+	}
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	buffer := make([]byte, 128*1024)
+	remaining := info.Size()
+	for remaining > 0 {
+		chunk := int64(len(buffer))
+		if remaining < chunk {
+			chunk = remaining
+		}
+		written, err := file.Write(buffer[:chunk])
+		if err != nil {
+			return
+		}
+		remaining -= int64(written)
+	}
+}
+
+// markTemporary sets FILE_ATTRIBUTE_TEMPORARY so the cache manager favors
+// keeping the short-lived runtime artifacts in memory instead of flushing
+// them to disk.
+func markTemporary(path string) {
+	pathUTF16, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return
+	}
+	_ = windows.SetFileAttributes(pathUTF16, windows.FILE_ATTRIBUTE_TEMPORARY)
 }
 
 func loadWinDivert(path string) (*winDivertAPI, error) {

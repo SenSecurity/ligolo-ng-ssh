@@ -174,12 +174,15 @@ port, and carries the accepted stream to the proxy through SSH. It does not
 need WebDAV and leaves non-selected sources on the native SMB service.
 
 It needs elevated Administrator, not SYSTEM. The official signed WinDivert
-2.2.2 AMD64 driver is embedded and hash-pinned. It is extracted to a protected
-temporary directory only while a ShadowPort listener is active, then removed.
-The target needs only the EXE, but Windows still requires the driver to be
-materialized temporarily on disk when loaded. The agent uses built-in Windows
-PowerShell to add a temporary firewall rule scoped to the exact internal IP,
-port, and source allowlist, then removes it during listener shutdown.
+2.2.2 AMD64 driver is embedded and hash-pinned. It is extracted to a randomly
+named temporary directory only while a ShadowPort listener is active, the
+driver image file is deleted as soon as the driver service has started, and the
+remaining files are overwritten with zeros and removed during listener
+shutdown. The target needs only the EXE, but Windows still requires the driver
+to be materialized temporarily on disk when loaded. The firewall exception is
+registered through the native Windows Firewall COM API, without spawning
+PowerShell, scoped to the exact internal IP, port, and source allowlist, and
+named with a random hex token; it is removed during listener shutdown.
 
 With an SSH agent key:
 
@@ -279,17 +282,25 @@ Inspect and verify cleanup from elevated Windows PowerShell:
 Get-NetTCPConnection -State Listen |
   Where-Object LocalPort -In 445,8445 |
   Format-Table LocalAddress,LocalPort,OwningProcess
-Get-NetFirewallRule -DisplayName 'Ligolo ShadowPort *' -ErrorAction SilentlyContinue
-Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ligolo-shadowport-*'
+Get-NetFirewallRule | Where-Object DisplayName -match '^[0-9a-f]{16}$'
+Get-ChildItem -Directory -LiteralPath $env:TEMP |
+  Where-Object { Test-Path (Join-Path $_.FullName 'WinDivert.dll') }
 ```
 
-After `listener_stop`, the firewall and directory queries should be empty. If
-the process was forcibly killed, remove only the feature's residue:
+While a listener is active, the firewall query shows one scoped inbound rule
+named with 16 hex characters, and the directory query shows one directory
+holding `WinDivert.dll`; the driver image file is deleted as soon as the driver
+service has started, and a machine-wide `WinDivert` driver service exists only
+while a filter handle is open. After `listener_stop`, these queries should be
+empty. If the process was forcibly killed, review each rule's port and address
+scope (other software can also use hex-only names) and remove only the
+feature's residue:
 
 ```powershell
-Get-NetFirewallRule -Name 'LigoloShadowPort-*' -ErrorAction SilentlyContinue |
+Get-NetFirewallRule | Where-Object DisplayName -match '^[0-9a-f]{16}$' |
   Remove-NetFirewallRule
-Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'ligolo-shadowport-*' |
+Get-ChildItem -Directory -LiteralPath $env:TEMP |
+  Where-Object { Test-Path (Join-Path $_.FullName 'WinDivert.dll') } |
   Remove-Item -Recurse -Force
 ```
 
