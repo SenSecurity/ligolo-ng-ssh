@@ -1,5 +1,7 @@
 .idea/*
 .tools/
+/build/
+pkg/agent/shadowport/assets/bin/
 setuptun.sh
 dist/
 release/

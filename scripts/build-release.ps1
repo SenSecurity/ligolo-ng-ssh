@@ -6,6 +6,17 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function New-GarbleSeed {
+    $seedBytes = [byte[]]::new(8)
+    $random = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $random.GetBytes($seedBytes)
+    } finally {
+        $random.Dispose()
+    }
+    return [Convert]::ToBase64String($seedBytes).TrimEnd('=')
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if (-not $GoExe) {
     $GoExe = Join-Path $repoRoot '.tools\go1.26.5\go\bin\go.exe'
@@ -27,6 +38,11 @@ if (-not $releaseRoot.Equals($expectedReleaseRoot, [StringComparison]::OrdinalIg
 }
 if (-not (Test-Path -LiteralPath $releaseReadmeSource)) {
     throw "Release README source is missing: $releaseReadmeSource"
+}
+$winDivert = & (Join-Path $PSScriptRoot 'fetch-windivert.ps1')
+$winDivertLicense = Join-Path $repoRoot 'third_party\windivert\LICENSE.txt'
+if (-not (Test-Path -LiteralPath $winDivertLicense)) {
+    throw "WinDivert license is missing: $winDivertLicense"
 }
 
 if (-not (Test-Path -LiteralPath (Join-Path $webSource 'package-lock.json'))) {
@@ -80,9 +96,20 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw 'Unable to resolve Web UI commit'
     }
-    $webWorkingTreeDirty = [bool]((git -C $webSource status --porcelain).Trim())
+    $webStatus = git -C $webSource status --porcelain
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Unable to inspect Web UI working tree'
+    }
+    $webWorkingTreeDirty = [bool]$webStatus
     $webLockSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $webSource 'package-lock.json')).Hash.ToLowerInvariant()
-    $workingTreeDirty = [bool]((git status --porcelain --untracked-files=all).Trim())
+    $workingTreeStatus = git status --porcelain --untracked-files=all -- . `
+        ':(exclude)artifacts/SHA256SUMS' `
+        ':(exclude)artifacts/build-manifest.json' `
+        ':(exclude)artifacts/TEST-REPORT.md'
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Unable to inspect working tree'
+    }
+    $workingTreeDirty = [bool]$workingTreeStatus
     $buildDate = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
     $version = 'ssh-' + $commit.Substring(0, 12)
     if ($workingTreeDirty) {
@@ -124,14 +151,7 @@ try {
             throw "Agent build failed for $($target.Name)"
         }
 
-        $seedBytes = [byte[]]::new(8)
-        $random = [Security.Cryptography.RandomNumberGenerator]::Create()
-        try {
-            $random.GetBytes($seedBytes)
-        } finally {
-            $random.Dispose()
-        }
-        $garbleSeed = [Convert]::ToBase64String($seedBytes).TrimEnd('=')
+        $garbleSeed = New-GarbleSeed
         & $GarbleExe "-seed=$garbleSeed" -literals -tiny build -trimpath -buildvcs=false -ldflags $ldflags -o $garbleOutput .\cmd\agent
         if ($LASTEXITCODE -ne 0) {
             throw "Garble agent build failed for $($target.Name)"
@@ -142,10 +162,33 @@ try {
             goos = $target.GOOS
             goarch = $target.GOARCH
             garble_seed = $garbleSeed
+            shadowport = $false
+        }
+
+        if ($target.Name -eq 'windows-amd64') {
+            $shadowOutput = Join-Path $targetRoot 'agent-shadow.exe'
+            $shadowGarbleOutput = Join-Path $targetRoot 'agent-shadow-garble.exe'
+
+            & $GoExe build -tags shadowport -trimpath -buildvcs=false -ldflags $ldflags -o $shadowOutput .\cmd\agent
+            if ($LASTEXITCODE -ne 0) {
+                throw 'ShadowPort agent build failed for windows-amd64'
+            }
+
+            $shadowGarbleSeed = New-GarbleSeed
+            & $GarbleExe "-seed=$shadowGarbleSeed" -literals -tiny build -tags shadowport -trimpath -buildvcs=false -ldflags $ldflags -o $shadowGarbleOutput .\cmd\agent
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Garble ShadowPort agent build failed for windows-amd64'
+            }
+
+            $manifestTargets[-1].shadowport = $true
+            $manifestTargets[-1] | Add-Member -NotePropertyName shadowport_garble_seed -NotePropertyValue $shadowGarbleSeed
         }
     }
 
     Copy-Item -LiteralPath $releaseReadmeSource -Destination (Join-Path $releaseRoot 'README.md')
+    $licenseRoot = Join-Path $releaseRoot 'licenses'
+    New-Item -ItemType Directory -Force -Path $licenseRoot | Out-Null
+    Copy-Item -LiteralPath $winDivertLicense -Destination (Join-Path $licenseRoot 'WinDivert-LICENSE.txt')
 
     $hashLines = Get-ChildItem -File -Recurse -LiteralPath $releaseRoot |
         Sort-Object FullName |
@@ -168,6 +211,15 @@ try {
         go = $goVersion
         garble = $garbleVersion
         garble_flags = @('-literals', '-tiny')
+        shadowport = [ordered]@{
+            platform = 'windows-amd64'
+            build_tag = 'shadowport'
+            runtime = 'WinDivert'
+            version = $winDivert.Version
+            archive_sha256 = $winDivert.ArchiveSha256
+            dll_sha256 = $winDivert.DllSha256
+            driver_sha256 = $winDivert.DriverSha256
+        }
         targets = $manifestTargets
     }
     $manifest | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 -LiteralPath (Join-Path $artifactsRoot 'build-manifest.json')

@@ -1,42 +1,56 @@
 ﻿{
     "upstream":  "https://github.com/nicocha30/ligolo-ng",
-    "commit":  "60fb207404d35a0674874220a5b93de1d2bdcfb0",
-    "web_ui_commit":  "d26d393468335c599e60a5311ac7fef9fcf738be",
-    "web_ui_working_tree_dirty":  true,
+    "commit":  "341e1e7207565019ddfa2a59f9639496e4a91de1",
+    "web_ui_commit":  "936dbda884a0a9e975f4c82f993f57a5e21f4afa",
+    "web_ui_working_tree_dirty":  false,
     "web_ui_package_lock_sha256":  "326016a69e8b645f17beef3ca3a55209a3bb254a1398b1290f7b5a0eb612bef8",
-    "working_tree_dirty":  true,
-    "version":  "ssh-60fb207404d3-dirty",
-    "build_date_utc":  "2026-07-29T17:47:29Z",
+    "working_tree_dirty":  false,
+    "version":  "ssh-341e1e720756",
+    "build_date_utc":  "2026-07-29T21:36:16Z",
     "go":  "go version go1.26.5 windows/amd64",
     "garble":  "mvdan.cc/garble v0.17.0",
     "garble_flags":  [
                          "-literals",
                          "-tiny"
                      ],
+    "shadowport":  {
+                       "platform":  "windows-amd64",
+                       "build_tag":  "shadowport",
+                       "runtime":  "WinDivert",
+                       "version":  "2.2.2",
+                       "archive_sha256":  "63cb41763bb4b20f600b6de04e991a9c2be73279e317d4d82f237b150c5f3f15",
+                       "dll_sha256":  "c1e060ee19444a259b2162f8af0f3fe8c4428a1c6f694dce20de194ac8d7d9a2",
+                       "driver_sha256":  "8da085332782708d8767bcace5327a6ec7283c17cfb85e40b03cd2323a90ddc2"
+                   },
     "targets":  [
                     {
                         "target":  "windows-amd64",
                         "goos":  "windows",
                         "goarch":  "amd64",
-                        "garble_seed":  "KYfw59owrnQ"
+                        "garble_seed":  "sSwFVXZ48qk",
+                        "shadowport":  true,
+                        "shadowport_garble_seed":  "1wlSwxG1z9g"
                     },
                     {
                         "target":  "windows-arm64",
                         "goos":  "windows",
                         "goarch":  "arm64",
-                        "garble_seed":  "sn3obo1RiTM"
+                        "garble_seed":  "KPMHBfgkjcE",
+                        "shadowport":  false
                     },
                     {
                         "target":  "linux-amd64",
                         "goos":  "linux",
                         "goarch":  "amd64",
-                        "garble_seed":  "0FbhteSJaSk"
+                        "garble_seed":  "6c5MVc3w9K8",
+                        "shadowport":  false
                     },
                     {
                         "target":  "linux-arm64",
                         "goos":  "linux",
                         "goarch":  "arm64",
-                        "garble_seed":  "7rmmuym9Wn0"
+                        "garble_seed":  "1r36s0jxckk",
+                        "shadowport":  false
                     }
                 ]
 }
